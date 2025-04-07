@@ -174,6 +174,14 @@ type Storage struct {
 	metricsTracker *metricnamestats.Tracker
 }
 
+type StorageOption func(s *Storage)
+
+func WithCachePath(path string) StorageOption {
+	return func(s *Storage) {
+		s.cachePath = path
+	}
+}
+
 type pendingHourMetricIDEntry struct {
 	AccountID uint32
 	ProjectID uint32
@@ -195,7 +203,7 @@ type OpenOptions struct {
 }
 
 // MustOpenStorage opens storage on the given path with the given retentionMsecs.
-func MustOpenStorage(path string, opts OpenOptions) *Storage {
+func MustOpenStorage(path string, opts OpenOptions, withOptions ...StorageOption) *Storage {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		logger.Panicf("FATAL: cannot determine absolute path for %q: %s", path, err)
@@ -210,7 +218,11 @@ func MustOpenStorage(path string, opts OpenOptions) *Storage {
 		retentionMsecs: retention.Milliseconds(),
 		stopCh:         make(chan struct{}),
 	}
+	for _, opt := range withOptions {
+		opt(s)
+	}
 	fs.MustMkdirIfNotExist(path)
+	fs.MustMkdirIfNotExist(s.cachePath)
 
 	// Check whether the cache directory must be removed
 	// It is removed if it contains resetCacheOnStartupFilename.
