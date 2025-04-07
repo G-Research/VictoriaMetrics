@@ -599,8 +599,10 @@ func (s *Server) processRPC(ctx *vmselectRequestCtx, rpcName string) error {
 	}
 }
 
-const maxMetricNameRawSize = 1024 * 1024
-const maxMetricNamesPerRequest = 1024 * 1024
+const (
+	maxMetricNameRawSize     = 1024 * 1024
+	maxMetricNamesPerRequest = 1024 * 1024
+)
 
 func (s *Server) processRegisterMetricNames(ctx *vmselectRequestCtx) error {
 	s.registerMetricNamesRequests.Inc()
@@ -1169,7 +1171,6 @@ func writeMetricNameStatRecords(ctx *vmselectRequestCtx, records []storage.Metri
 }
 
 func (s *Server) processResetMetricUsageStats(ctx *vmselectRequestCtx) error {
-
 	if err := s.beginConcurrentRequest(ctx); err != nil {
 		return ctx.writeErrorMessage(err)
 	}

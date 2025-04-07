@@ -36,6 +36,7 @@ var (
 		"See https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt . "+
 		"With enabled proxy protocol http server cannot serve regular /metrics endpoint. Use -pushmetrics.url for metrics pushing")
 	storageDataPath   = flag.String("storageDataPath", "vmstorage-data", "Path to storage data")
+	cacheDataPath     = flag.String("cacheDataPath", "", "Optional path the cache directory. Defaults to [storageDataPath]/cache")
 	vminsertAddr      = flag.String("vminsertAddr", ":8400", "TCP address to accept connections from vminsert services")
 	vmselectAddr      = flag.String("vmselectAddr", ":8401", "TCP address to accept connections from vmselect services")
 	snapshotAuthKey   = flagutil.NewPassword("snapshotAuthKey", "authKey, which must be passed in query string to /snapshot* pages")
@@ -142,6 +143,7 @@ func main() {
 		TrackMetricNamesStats: *trackMetricNamesStats,
 	}
 	strg := storage.MustOpenStorage(*storageDataPath, opts)
+
 	initStaleSnapshotsRemover(strg)
 
 	var m storage.Metrics

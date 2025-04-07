@@ -211,7 +211,7 @@ func (mt *Tracker) saveLocked() error {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("cannot stat %q: %s", dir, err)
 		}
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("cannot create dir %q: %s", dir, err)
 		}
 	}

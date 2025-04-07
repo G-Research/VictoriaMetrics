@@ -126,6 +126,27 @@ func MustOpen(path string, nocache bool) *Reader {
 	return r
 }
 
+func Open(path string, nocache bool) (*Reader, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open file: %s", err)
+	}
+	r := &Reader{
+		f:  f,
+		br: getBufioReader(f),
+	}
+	if *disableFadvise {
+		// Unconditionally disable fadvise() syscall
+		// See https://github.com/VictoriaMetrics/VictoriaMetrics/pull/5120 for details on why this is needed
+		nocache = false
+	}
+	if nocache {
+		r.st.fd = f.Fd()
+	}
+	readersCount.Inc()
+	return r, nil
+}
+
 // MustClose closes the underlying file passed to MustOpen.
 func (r *Reader) MustClose() {
 	if err := r.st.close(); err != nil {
@@ -214,7 +235,7 @@ func (w *Writer) Path() string {
 //
 // If nocache is set, the writer doesn't pollute OS page cache.
 func OpenWriterAt(path string, offset int64, nocache bool) (*Writer, error) {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
 	}

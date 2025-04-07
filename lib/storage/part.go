@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"fmt"
 	"path/filepath"
 	"sync"
 	"unsafe"
@@ -93,6 +94,30 @@ func newPart(ph *partHeader, path string, size uint64, metaindexReader filestrea
 	p.metaindex = metaindex
 
 	return &p
+}
+
+func newPartReadOnly(ph *partHeader, path string, size uint64, metaindexReader filestream.ReadCloser, timestampsFile, valuesFile, indexFile fs.MustReadAtCloser) (_ *part, err error) {
+	metaindex, err := unmarshalMetaindexRows(nil, metaindexReader)
+	if err != nil {
+		return nil, fmt.Errorf("cannot unmarshal metaindex data from %q: %s", path, err)
+	}
+	defer func() {
+		if rerr := recover(); rerr != nil {
+			err = fmt.Errorf("recover from mainindex reader panic: %v", rerr)
+		}
+	}()
+	metaindexReader.MustClose()
+
+	var p part
+	p.ph = *ph
+	p.path = path
+	p.size = size
+	p.timestampsFile = timestampsFile
+	p.valuesFile = valuesFile
+	p.indexFile = indexFile
+	p.metaindex = metaindex
+
+	return &p, nil
 }
 
 // String returns human-readable representation of p.

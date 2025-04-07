@@ -44,8 +44,8 @@ var (
 )
 
 // NewVMSelectServer starts new server at the given addr, which serves vmselect requests from the given s.
-func NewVMSelectServer(addr string, s *storage.Storage) (*vmselectapi.Server, error) {
-	api := &vmstorageAPI{
+func NewVMSelectServer(addr string, s *storage.ReadOnlyStorage) (*vmselectapi.Server, error) {
+	api := &vmreadAPI{
 		s: s,
 	}
 	limits := vmselectapi.Limits{
@@ -60,12 +60,12 @@ func NewVMSelectServer(addr string, s *storage.Storage) (*vmselectapi.Server, er
 	return vmselectapi.NewServer(addr, api, limits, *disableRPCCompression)
 }
 
-// vmstorageAPI impelements vmselectapi.API
-type vmstorageAPI struct {
-	s *storage.Storage
+// vmreadAPI impelements vmselectapi.API
+type vmreadAPI struct {
+	s *storage.ReadOnlyStorage
 }
 
-func (api *vmstorageAPI) InitSearch(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) (vmselectapi.BlockIterator, error) {
+func (api *vmreadAPI) InitSearch(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) (vmselectapi.BlockIterator, error) {
 	tr := sq.GetTimeRange()
 	if err := checkTimeRange(api.s, tr); err != nil {
 		return nil, err
@@ -87,7 +87,7 @@ func (api *vmstorageAPI) InitSearch(qt *querytracer.Tracer, sq *storage.SearchQu
 	return bi, nil
 }
 
-func (api *vmstorageAPI) SearchMetricNames(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) ([]string, error) {
+func (api *vmreadAPI) SearchMetricNames(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) ([]string, error) {
 	tr := sq.GetTimeRange()
 	maxMetrics := sq.MaxMetrics
 	if maxMetrics <= 0 {
@@ -105,7 +105,7 @@ func (api *vmstorageAPI) SearchMetricNames(qt *querytracer.Tracer, sq *storage.S
 	return api.s.SearchMetricNames(qt, tfss, tr, maxMetrics, deadline)
 }
 
-func (api *vmstorageAPI) LabelValues(qt *querytracer.Tracer, sq *storage.SearchQuery, labelName string, maxLabelValues int, deadline uint64) ([]string, error) {
+func (api *vmreadAPI) LabelValues(qt *querytracer.Tracer, sq *storage.SearchQuery, labelName string, maxLabelValues int, deadline uint64) ([]string, error) {
 	tr := sq.GetTimeRange()
 	maxMetrics := sq.MaxMetrics
 	if maxMetrics <= 0 {
@@ -120,7 +120,7 @@ func (api *vmstorageAPI) LabelValues(qt *querytracer.Tracer, sq *storage.SearchQ
 	return api.s.SearchLabelValues(qt, sq.AccountID, sq.ProjectID, labelName, tfss, tr, maxLabelValues, maxMetrics, deadline)
 }
 
-func (api *vmstorageAPI) TagValueSuffixes(qt *querytracer.Tracer, accountID, projectID uint32, tr storage.TimeRange, tagKey, tagValuePrefix string, delimiter byte,
+func (api *vmreadAPI) TagValueSuffixes(qt *querytracer.Tracer, accountID, projectID uint32, tr storage.TimeRange, tagKey, tagValuePrefix string, delimiter byte,
 	maxSuffixes int, deadline uint64,
 ) ([]string, error) {
 	suffixes, err := api.s.SearchTagValueSuffixes(qt, accountID, projectID, tr, tagKey, tagValuePrefix, delimiter, maxSuffixes, deadline)
@@ -134,7 +134,7 @@ func (api *vmstorageAPI) TagValueSuffixes(qt *querytracer.Tracer, accountID, pro
 	return suffixes, nil
 }
 
-func (api *vmstorageAPI) LabelNames(qt *querytracer.Tracer, sq *storage.SearchQuery, maxLabelNames int, deadline uint64) ([]string, error) {
+func (api *vmreadAPI) LabelNames(qt *querytracer.Tracer, sq *storage.SearchQuery, maxLabelNames int, deadline uint64) ([]string, error) {
 	tr := sq.GetTimeRange()
 	maxMetrics := sq.MaxMetrics
 	if maxMetrics <= 0 {
@@ -149,15 +149,15 @@ func (api *vmstorageAPI) LabelNames(qt *querytracer.Tracer, sq *storage.SearchQu
 	return api.s.SearchLabelNames(qt, sq.AccountID, sq.ProjectID, tfss, tr, maxLabelNames, maxMetrics, deadline)
 }
 
-func (api *vmstorageAPI) SeriesCount(_ *querytracer.Tracer, accountID, projectID uint32, deadline uint64) (uint64, error) {
+func (api *vmreadAPI) SeriesCount(_ *querytracer.Tracer, accountID, projectID uint32, deadline uint64) (uint64, error) {
 	return api.s.GetSeriesCount(accountID, projectID, deadline)
 }
 
-func (api *vmstorageAPI) Tenants(qt *querytracer.Tracer, tr storage.TimeRange, deadline uint64) ([]string, error) {
+func (api *vmreadAPI) Tenants(qt *querytracer.Tracer, tr storage.TimeRange, deadline uint64) ([]string, error) {
 	return api.s.SearchTenants(qt, tr, deadline)
 }
 
-func (api *vmstorageAPI) TSDBStatus(qt *querytracer.Tracer, sq *storage.SearchQuery, focusLabel string, topN int, deadline uint64) (*storage.TSDBStatus, error) {
+func (api *vmreadAPI) TSDBStatus(qt *querytracer.Tracer, sq *storage.SearchQuery, focusLabel string, topN int, deadline uint64) (*storage.TSDBStatus, error) {
 	tr := sq.GetTimeRange()
 	maxMetrics := sq.MaxMetrics
 	if maxMetrics <= 0 {
@@ -173,39 +173,25 @@ func (api *vmstorageAPI) TSDBStatus(qt *querytracer.Tracer, sq *storage.SearchQu
 	return api.s.GetTSDBStatus(qt, sq.AccountID, sq.ProjectID, tfss, date, focusLabel, topN, maxMetrics, deadline)
 }
 
-func (api *vmstorageAPI) DeleteSeries(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) (int, error) {
-	tr := sq.GetTimeRange()
-	maxMetrics := sq.MaxMetrics
-	if maxMetrics <= 0 {
-		// fallback to maxUniqueTimeSeries if no limit is provided,
-		// see https://github.com/VictoriaMetrics/VictoriaMetrics/issues/7857
-		maxMetrics = GetMaxUniqueTimeSeries()
-	}
-	tfss, err := api.setupTfss(qt, sq, tr, maxMetrics, deadline)
-	if err != nil {
-		return 0, err
-	}
-	if len(tfss) == 0 {
-		return 0, fmt.Errorf("missing tag filters")
-	}
-	return api.s.DeleteSeries(qt, tfss, maxMetrics)
+func (api *vmreadAPI) DeleteSeries(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) (int, error) {
+	return 0, nil
 }
 
-func (api *vmstorageAPI) RegisterMetricNames(qt *querytracer.Tracer, mrs []storage.MetricRow, _ uint64) error {
+func (api *vmreadAPI) RegisterMetricNames(qt *querytracer.Tracer, mrs []storage.MetricRow, _ uint64) error {
 	api.s.RegisterMetricNames(qt, mrs)
 	return nil
 }
 
-func (api *vmstorageAPI) GetMetricNamesUsageStats(qt *querytracer.Tracer, tt *storage.TenantToken, limit, le int, matchPattern string, _ uint64) (storage.MetricNamesStatsResponse, error) {
+func (api *vmreadAPI) GetMetricNamesUsageStats(qt *querytracer.Tracer, tt *storage.TenantToken, limit, le int, matchPattern string, _ uint64) (storage.MetricNamesStatsResponse, error) {
 	return api.s.GetMetricNamesStats(qt, tt, limit, le, matchPattern), nil
 }
 
-func (api *vmstorageAPI) ResetMetricNamesUsageStats(qt *querytracer.Tracer, _ uint64) error {
+func (api *vmreadAPI) ResetMetricNamesUsageStats(qt *querytracer.Tracer, _ uint64) error {
 	api.s.ResetMetricNamesStats(qt)
 	return nil
 }
 
-func (api *vmstorageAPI) setupTfss(qt *querytracer.Tracer, sq *storage.SearchQuery, tr storage.TimeRange, maxMetrics int, deadline uint64) ([]*storage.TagFilters, error) {
+func (api *vmreadAPI) setupTfss(qt *querytracer.Tracer, sq *storage.SearchQuery, tr storage.TimeRange, maxMetrics int, deadline uint64) ([]*storage.TagFilters, error) {
 	tfss := make([]*storage.TagFilters, 0, len(sq.TagFilterss))
 	accountID := sq.AccountID
 	projectID := sq.ProjectID
@@ -224,7 +210,7 @@ func (api *vmstorageAPI) setupTfss(qt *querytracer.Tracer, sq *storage.SearchQue
 				if len(paths) >= maxMetrics {
 					return nil, fmt.Errorf("more than %d time series match Graphite query %q; "+
 						"either narrow down the query or increase the corresponding -search.max* command-line flag value at vmselect nodes; "+
-						"see https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/#resource-usage-limits", maxMetrics, query)
+						"see https://docs.victoriametrics.com/#resource-usage-limits", maxMetrics, query)
 				}
 				tfs.AddGraphiteQuery(query, paths, tf.IsNegative)
 				continue
@@ -240,7 +226,7 @@ func (api *vmstorageAPI) setupTfss(qt *querytracer.Tracer, sq *storage.SearchQue
 
 // blockIterator implements vmselectapi.BlockIterator
 type blockIterator struct {
-	sr storage.Search
+	sr storage.ReadOnlySearch
 }
 
 var blockIteratorsPool sync.Pool
@@ -272,7 +258,7 @@ func (bi *blockIterator) Error() error {
 }
 
 // checkTimeRange returns true if the given tr is denied for querying.
-func checkTimeRange(s *storage.Storage, tr storage.TimeRange) error {
+func checkTimeRange(s *storage.ReadOnlyStorage, tr storage.TimeRange) error {
 	if !*denyQueriesOutsideRetention {
 		return nil
 	}

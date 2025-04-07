@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -561,18 +562,25 @@ func mustOpenPartitions(smallPartitionsPath, bigPartitionsPath string, s *Storag
 }
 
 func mustPopulatePartitionNames(partitionsPath string, ptNames map[string]bool) {
-	des := fs.MustReadDir(partitionsPath)
-	for _, de := range des {
-		if !fs.IsDirOrSymlink(de) {
-			// Skip non-directories
+	for range 5 {
+		des, err := os.ReadDir(partitionsPath)
+		if err != nil {
+			time.Sleep(1 * time.Second)
 			continue
 		}
-		ptName := de.Name()
-		if ptName == snapshotsDirname {
-			// Skip directory with snapshots
-			continue
+		for _, de := range des {
+			if !fs.IsDirOrSymlink(de) {
+				// Skip non-directories
+				continue
+			}
+			ptName := de.Name()
+			if ptName == snapshotsDirname {
+				// Skip directory with snapshots
+				continue
+			}
+			ptNames[ptName] = true
 		}
-		ptNames[ptName] = true
+		return
 	}
 }
 
