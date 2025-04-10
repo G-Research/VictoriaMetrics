@@ -334,25 +334,24 @@ func MustOpenStorage(path string, opts OpenOptions) *Storage {
 	return s
 }
 
-func MustOpenStorageReadOnly(path string, cachePath *string) *Storage {
+func MustOpenStorageReadOnly(path string, cachePath string) *Storage {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		logger.Panicf("FATAL: cannot determine absolute path for %q: %s", path, err)
 	}
 
-	if cachePath == nil {
-		cp := filepath.Join(path, cacheDirname)
-		cachePath = &cp
+	if cachePath == "" {
+		cachePath = filepath.Join(path, cacheDirname)
 	} else {
-		*cachePath, err = filepath.Abs(*cachePath)
+		cachePath, err = filepath.Abs(cachePath)
 		if err != nil {
-			logger.Panicf("FATAL: cannot determine absolute path for %q: %s", *cachePath, err)
+			logger.Panicf("FATAL: cannot determine absolute path for %q: %s", cachePath, err)
 		}
 	}
 
 	s := &Storage{
 		path:           path,
-		cachePath:      *cachePath,
+		cachePath:      cachePath,
 		retentionMsecs: int64(retentionMax),
 		stopCh:         make(chan struct{}),
 	}

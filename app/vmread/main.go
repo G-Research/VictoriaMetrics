@@ -28,7 +28,7 @@ func main() {
 	buildinfo.Init()
 	logger.Init()
 
-	strg := storage.MustOpenStorageReadOnly(*storageDataPath, cacheDataPath)
+	strg := storage.MustOpenStorageReadOnly(*storageDataPath, *cacheDataPath)
 	vmselectSrv, err := servers.NewVMSelectServer(*vmselectAddr, strg)
 	if err != nil {
 		logger.Fatalf("cannot create a server with -vmselectAddr=%s: %s", *vmselectAddr, err)
