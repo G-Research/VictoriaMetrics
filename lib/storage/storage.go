@@ -335,6 +335,7 @@ func MustOpenStorage(path string, opts OpenOptions) *Storage {
 }
 
 func MustOpenStorageReadOnly(path string, cachePath string) *Storage {
+	retention := time.Second * 12
 	path, err := filepath.Abs(path)
 	if err != nil {
 		logger.Panicf("FATAL: cannot determine absolute path for %q: %s", path, err)
@@ -356,6 +357,7 @@ func MustOpenStorageReadOnly(path string, cachePath string) *Storage {
 		stopCh:         make(chan struct{}),
 	}
 
+	// Load caches.
 	mem := memory.Allowed()
 	s.tsidCache = s.mustLoadCache("metricName_tsid", getTSIDCacheSize())
 	s.metricIDCache = s.mustLoadCache("metricID_tsid", mem/16)
@@ -390,6 +392,12 @@ func MustOpenStorageReadOnly(path string, cachePath string) *Storage {
 	s.idbCurr.Store(idbCurr)
 	s.idbNext.Store(idbNext)
 
+	// Initialize nextRotationTimestamp
+	nowSecs := int64(fasttime.UnixTimestamp())
+	retentionSecs := retention.Milliseconds() / 1000 // not .Seconds() because unnecessary float64 conversion
+	nextRotationTimestamp := nextRetentionDeadlineSeconds(nowSecs, retentionSecs, retentionTimezoneOffsetSecs)
+	s.nextRotationTimestamp.Store(nextRotationTimestamp)
+
 	// Load nextDayMetricIDs cache
 	date := fasttime.UnixDate()
 	nextDayMetricIDs := s.mustLoadNextDayMetricIDs(idbCurr.generation, date)
@@ -411,6 +419,9 @@ func MustOpenStorageReadOnly(path string, cachePath string) *Storage {
 	tablePath := filepath.Join(path, dataDirname)
 	tb := mustOpenTable(tablePath, s)
 	s.tb = tb
+
+	s.startCurrHourMetricIDsUpdater()
+	s.startNextDayMetricIDsUpdater()
 
 	return s
 }
