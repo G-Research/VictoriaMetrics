@@ -174,14 +174,6 @@ type Storage struct {
 	metricsTracker *metricnamestats.Tracker
 }
 
-type StorageOption func(s *Storage)
-
-func WithCachePath(path string) StorageOption {
-	return func(s *Storage) {
-		s.cachePath = path
-	}
-}
-
 type pendingHourMetricIDEntry struct {
 	AccountID uint32
 	ProjectID uint32
@@ -203,7 +195,7 @@ type OpenOptions struct {
 }
 
 // MustOpenStorage opens storage on the given path with the given retentionMsecs.
-func MustOpenStorage(path string, opts OpenOptions, withOptions ...StorageOption) *Storage {
+func MustOpenStorage(path string, opts OpenOptions) *Storage {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		logger.Panicf("FATAL: cannot determine absolute path for %q: %s", path, err)
@@ -217,9 +209,6 @@ func MustOpenStorage(path string, opts OpenOptions, withOptions ...StorageOption
 		cachePath:      filepath.Join(path, cacheDirname),
 		retentionMsecs: retention.Milliseconds(),
 		stopCh:         make(chan struct{}),
-	}
-	for _, opt := range withOptions {
-		opt(s)
 	}
 	fs.MustMkdirIfNotExist(path)
 	fs.MustMkdirIfNotExist(s.cachePath)
@@ -341,6 +330,88 @@ func MustOpenStorage(path string, opts OpenOptions, withOptions ...StorageOption
 	s.startCurrHourMetricIDsUpdater()
 	s.startNextDayMetricIDsUpdater()
 	s.startRetentionWatcher()
+
+	return s
+}
+
+func MustOpenStorageReadOnly(path string, cachePath *string) *Storage {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		logger.Panicf("FATAL: cannot determine absolute path for %q: %s", path, err)
+	}
+
+	if cachePath == nil {
+		cp := filepath.Join(path, cacheDirname)
+		cachePath = &cp
+	} else {
+		*cachePath, err = filepath.Abs(*cachePath)
+		if err != nil {
+			logger.Panicf("FATAL: cannot determine absolute path for %q: %s", *cachePath, err)
+		}
+	}
+
+	s := &Storage{
+		path:           path,
+		cachePath:      *cachePath,
+		retentionMsecs: int64(retentionMax),
+		stopCh:         make(chan struct{}),
+	}
+
+	mem := memory.Allowed()
+	s.tsidCache = s.mustLoadCache("metricName_tsid", getTSIDCacheSize())
+	s.metricIDCache = s.mustLoadCache("metricID_tsid", mem/16)
+	s.metricNameCache = s.mustLoadCache("metricID_metricName", mem/10)
+	s.dateMetricIDCache = newDateMetricIDCache()
+
+	hour := fasttime.UnixHour()
+	hmCurr := s.mustLoadHourMetricIDs(hour, "curr_hour_metric_ids")
+	hmPrev := s.mustLoadHourMetricIDs(hour-1, "prev_hour_metric_ids")
+	s.currHourMetricIDs.Store(hmCurr)
+	s.prevHourMetricIDs.Store(hmPrev)
+
+	s.pendingNextDayMetricIDs = &uint64set.Set{}
+
+	s.prefetchedMetricIDs = &uint64set.Set{}
+
+	// Load metadata
+	metadataDir := filepath.Join(path, metadataDirname)
+	isEmptyDB := !fs.IsPathExist(filepath.Join(path, indexdbDirname))
+	if !fs.IsPathExist(metadataDir) {
+		logger.Fatalf("FATAL: metadata dir %q must exist", metadataDir)
+	}
+	s.minTimestampForCompositeIndex = mustGetMinTimestampForCompositeIndex(metadataDir, isEmptyDB)
+
+	// Load indexdb
+	idbPath := filepath.Join(path, indexdbDirname)
+	idbNext, idbCurr, idbPrev := s.mustOpenIndexDBTables(idbPath)
+
+	idbCurr.SetExtDB(idbPrev)
+	idbNext.SetExtDB(idbCurr)
+
+	s.idbCurr.Store(idbCurr)
+	s.idbNext.Store(idbNext)
+
+	// Load nextDayMetricIDs cache
+	date := fasttime.UnixDate()
+	nextDayMetricIDs := s.mustLoadNextDayMetricIDs(idbCurr.generation, date)
+	s.nextDayMetricIDs.Store(nextDayMetricIDs)
+
+	// Load deleted metricIDs from idbCurr and idbPrev
+	dmisCurr, err := idbCurr.loadDeletedMetricIDs()
+	if err != nil {
+		logger.Panicf("FATAL: cannot load deleted metricIDs for the current indexDB at %q: %s", path, err)
+	}
+	dmisPrev, err := idbPrev.loadDeletedMetricIDs()
+	if err != nil {
+		logger.Panicf("FATAL: cannot load deleted metricIDs for the previous indexDB at %q: %s", path, err)
+	}
+	s.setDeletedMetricIDs(dmisCurr)
+	s.updateDeletedMetricIDs(dmisPrev)
+
+	// Load data
+	tablePath := filepath.Join(path, dataDirname)
+	tb := mustOpenTable(tablePath, s)
+	s.tb = tb
 
 	return s
 }
@@ -1190,7 +1261,7 @@ func (s *Storage) mustSaveHourMetricIDs(hm *hourMetricIDs, name string) {
 		}
 	}
 
-	if err := os.WriteFile(path, dst, 0644); err != nil {
+	if err := os.WriteFile(path, dst, 0o644); err != nil {
 		logger.Panicf("FATAL: cannot write %d bytes to %q: %s", len(dst), path, err)
 	}
 }

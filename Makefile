@@ -27,7 +27,8 @@ include package/release/Makefile
 all: \
 	vminsert \
 	vmselect \
-	vmstorage
+	vmstorage \
+	vmread
 
 all-pure: \
 	vminsert-pure \

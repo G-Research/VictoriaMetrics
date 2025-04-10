@@ -142,11 +142,7 @@ func main() {
 		DisablePerDayIndex:    *disablePerDayIndex,
 		TrackMetricNamesStats: *trackMetricNamesStats,
 	}
-	var withOpts []storage.StorageOption
-	if *cacheDataPath != "" {
-		withOpts = append(withOpts, storage.WithCachePath(*cacheDataPath))
-	}
-	strg := storage.MustOpenStorage(*storageDataPath, opts, withOpts...)
+	strg := storage.MustOpenStorage(*storageDataPath, opts)
 
 	initStaleSnapshotsRemover(strg)
 
