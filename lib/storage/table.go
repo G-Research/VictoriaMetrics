@@ -162,7 +162,7 @@ func mustOpenTableReadOnly(path string, s *Storage) *table {
 			case <-time.After(5 * time.Second):
 				// Do nothing. This is just to prevent the goroutine from exiting immediately.
 				tb.ptwsLock.Lock()
-				pts := mustOpenPartitions(smallPartitionsPath, bigPartitionsPath, s)
+				pts := mustOpenPartitionsReadOnly(smallPartitionsPath, bigPartitionsPath, s)
 				for _, pt := range pts {
 					tb.addPartitionNolock(pt)
 				}
@@ -596,6 +596,44 @@ func mustOpenPartitions(smallPartitionsPath, bigPartitionsPath string, s *Storag
 			smallPartsPath := filepath.Join(smallPartitionsPath, ptName)
 			bigPartsPath := filepath.Join(bigPartitionsPath, ptName)
 			pt := mustOpenPartition(smallPartsPath, bigPartsPath, s)
+
+			ptsLock.Lock()
+			pts = append(pts, pt)
+			ptsLock.Unlock()
+		}(ptName)
+	}
+	wg.Wait()
+
+	return pts
+}
+
+func mustOpenPartitionsReadOnly(smallPartitionsPath, bigPartitionsPath string, s *Storage) []*partition {
+	// Certain partition directories in either `big` or `small` dir may be missing
+	// after restoring from backup. So populate partition names from both dirs.
+	ptNames := make(map[string]bool)
+	mustPopulatePartitionNames(smallPartitionsPath, ptNames)
+	mustPopulatePartitionNames(bigPartitionsPath, ptNames)
+	var pts []*partition
+	var ptsLock sync.Mutex
+
+	// Open partitions in parallel. This should reduce the time needed for opening multiple partitions.
+	var wg sync.WaitGroup
+	concurrencyLimiterCh := make(chan struct{}, cgroup.AvailableCPUs())
+	for ptName := range ptNames {
+		wg.Add(1)
+		concurrencyLimiterCh <- struct{}{}
+		go func(ptName string) {
+			defer func() {
+				<-concurrencyLimiterCh
+				wg.Done()
+			}()
+
+			smallPartsPath := filepath.Join(smallPartitionsPath, ptName)
+			bigPartsPath := filepath.Join(bigPartitionsPath, ptName)
+			pt := mustOpenPartitionReadOnly(smallPartsPath, bigPartsPath, s)
+			if pt == nil {
+				return
+			}
 
 			ptsLock.Lock()
 			pts = append(pts, pt)

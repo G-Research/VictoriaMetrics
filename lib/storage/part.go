@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"fmt"
 	"path/filepath"
 	"sync"
 	"unsafe"
@@ -70,6 +71,38 @@ func mustOpenFilePart(path string) *part {
 
 	size := timestampsSize + valuesSize + indexSize + metaindexSize
 	return newPart(&ph, path, size, metaindexFile, timestampsFile, valuesFile, indexFile)
+}
+
+// tryOpenFilePart opens file-based part from the given path.
+func tryOpenFilePart(path string) (p *part, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("cannot open part at %q: %s", path, r)
+		}
+	}()
+	path = filepath.Clean(path)
+
+	var ph partHeader
+	ph.MustReadMetadata(path)
+
+	timestampsPath := filepath.Join(path, timestampsFilename)
+	timestampsFile := fs.MustOpenReaderAt(timestampsPath)
+	timestampsSize := fs.MustFileSize(timestampsPath)
+
+	valuesPath := filepath.Join(path, valuesFilename)
+	valuesFile := fs.MustOpenReaderAt(valuesPath)
+	valuesSize := fs.MustFileSize(valuesPath)
+
+	indexPath := filepath.Join(path, indexFilename)
+	indexFile := fs.MustOpenReaderAt(indexPath)
+	indexSize := fs.MustFileSize(indexPath)
+
+	metaindexPath := filepath.Join(path, metaindexFilename)
+	metaindexFile := filestream.MustOpen(metaindexPath, true)
+	metaindexSize := fs.MustFileSize(metaindexPath)
+
+	size := timestampsSize + valuesSize + indexSize + metaindexSize
+	return newPart(&ph, path, size, metaindexFile, timestampsFile, valuesFile, indexFile), nil
 }
 
 // newPart returns new part initialized with the given arguments.
