@@ -127,6 +127,53 @@ func mustOpenTable(path string, s *Storage) *table {
 	return tb
 }
 
+func mustOpenTableReadOnly(path string, s *Storage) *table {
+	path = filepath.Clean(path)
+
+	// Create a directory for the table if it doesn't exist yet.
+	if !fs.IsPathExist(path) {
+		logger.Panicf("FATAL: table path %q must exist", path)
+	}
+
+	smallPartitionsPath := filepath.Join(path, smallDirname)
+	bigPartitionsPath := filepath.Join(path, bigDirname)
+
+	// Open partitions.
+	pts := mustOpenPartitions(smallPartitionsPath, bigPartitionsPath, s)
+
+	tb := &table{
+		path:                path,
+		smallPartitionsPath: smallPartitionsPath,
+		bigPartitionsPath:   bigPartitionsPath,
+		s:                   s,
+
+		stopCh: make(chan struct{}),
+	}
+	for _, pt := range pts {
+		tb.addPartitionNolock(pt)
+	}
+
+	// source partitions from the disk every 5 seconds
+	go func() {
+		for {
+			select {
+			case <-tb.stopCh:
+				return
+			case <-time.After(5 * time.Second):
+				// Do nothing. This is just to prevent the goroutine from exiting immediately.
+				tb.ptwsLock.Lock()
+				pts := mustOpenPartitions(smallPartitionsPath, bigPartitionsPath, s)
+				for _, pt := range pts {
+					tb.addPartitionNolock(pt)
+				}
+				tb.ptwsLock.Unlock()
+			}
+		}
+	}()
+
+	return tb
+}
+
 // MustCreateSnapshot creates tb snapshot and returns paths to small and big parts of it.
 func (tb *table) MustCreateSnapshot(snapshotName string) (string, string) {
 	logger.Infof("creating table snapshot of %q...", tb.path)

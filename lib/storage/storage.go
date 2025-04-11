@@ -417,7 +417,7 @@ func MustOpenStorageReadOnly(path string, cachePath string) *Storage {
 
 	// Load data
 	tablePath := filepath.Join(path, dataDirname)
-	tb := mustOpenTable(tablePath, s)
+	tb := mustOpenTableReadOnly(tablePath, s)
 	s.tb = tb
 
 	s.startCurrHourMetricIDsUpdater()
