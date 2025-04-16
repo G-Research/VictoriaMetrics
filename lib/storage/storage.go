@@ -1065,6 +1065,22 @@ func (s *Storage) resetAndSaveTSIDCache() {
 	s.mustSaveCache(s.tsidCache, "metricName_tsid")
 }
 
+func (s *Storage) CloseReadOnly() {
+	close(s.stopCh)
+
+	s.freeDiskSpaceWatcherWG.Wait()
+	s.retentionWatcherWG.Wait()
+	s.currHourMetricIDsUpdaterWG.Wait()
+	s.nextDayMetricIDsUpdaterWG.Wait()
+
+	s.mustSaveCache(s.tsidCache, "metricName_tsid")
+	s.tsidCache.Stop()
+	s.mustSaveCache(s.metricIDCache, "metricID_tsid")
+	s.metricIDCache.Stop()
+	s.mustSaveCache(s.metricNameCache, "metricID_metricName")
+	s.metricNameCache.Stop()
+}
+
 // MustClose closes the storage.
 //
 // It is expected that the s is no longer used during the close.

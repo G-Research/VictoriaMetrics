@@ -39,5 +39,5 @@ func main() {
 	pushmetrics.Stop()
 
 	vmselectSrv.MustStop()
-	strg.MustClose()
+	strg.CloseReadOnly()
 }
