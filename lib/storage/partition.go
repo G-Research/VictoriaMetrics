@@ -2006,9 +2006,7 @@ func mustOpenPartsReadOnly(partsFile, path string, partNames []string) []*partWr
 		// including unclean shutdown.
 		partPath := filepath.Join(path, partName)
 		if !fs.IsPathExist(partPath) {
-			logger.Panicf("FATAL: part %q is listed in %q, but is missing on disk; "+
-				"ensure %q contents is not corrupted; remove %q to rebuild its content from the list of existing parts",
-				partPath, partsFile, partsFile, partsFile)
+			continue
 		}
 
 		m[partName] = struct{}{}
