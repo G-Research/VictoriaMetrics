@@ -384,7 +384,7 @@ func MustOpenStorageReadOnly(path string, cachePath string) *Storage {
 
 	// Load indexdb
 	idbPath := filepath.Join(path, indexdbDirname)
-	idbNext, idbCurr, idbPrev := s.mustOpenIndexDBTables(idbPath)
+	idbNext, idbCurr, idbPrev := s.mustOpenIndexDBTablesReadOnly(idbPath)
 
 	idbCurr.SetExtDB(idbPrev)
 	idbNext.SetExtDB(idbCurr)
@@ -3176,6 +3176,54 @@ func (s *Storage) mustOpenIndexDBTables(path string) (next, curr, prev *indexDB)
 		}
 		fs.MustSyncPath(path)
 
+		tableNames = tableNames[len(tableNames)-3:]
+	}
+
+	// Open tables
+	nextPath := filepath.Join(path, tableNames[2])
+	currPath := filepath.Join(path, tableNames[1])
+	prevPath := filepath.Join(path, tableNames[0])
+
+	next = mustOpenIndexDB(nextPath, s, &s.isReadOnly)
+	curr = mustOpenIndexDB(currPath, s, &s.isReadOnly)
+	prev = mustOpenIndexDB(prevPath, s, &s.isReadOnly)
+
+	return next, curr, prev
+}
+
+func (s *Storage) mustOpenIndexDBTablesReadOnly(path string) (next, curr, prev *indexDB) {
+	// Search for the three most recent tables - the prev, curr and next.
+	des := fs.MustReadDir(path)
+	var tableNames []string
+	for _, de := range des {
+		if !fs.IsDirOrSymlink(de) {
+			// Skip non-directories.
+			continue
+		}
+		tableName := de.Name()
+		if !indexDBTableNameRegexp.MatchString(tableName) {
+			// Skip invalid directories.
+			continue
+		}
+		tableNames = append(tableNames, tableName)
+	}
+	sort.Slice(tableNames, func(i, j int) bool {
+		return tableNames[i] < tableNames[j]
+	})
+	switch len(tableNames) {
+	case 0:
+		prevName := nextIndexDBTableName()
+		currName := nextIndexDBTableName()
+		nextName := nextIndexDBTableName()
+		tableNames = append(tableNames, prevName, currName, nextName)
+	case 1:
+		currName := nextIndexDBTableName()
+		nextName := nextIndexDBTableName()
+		tableNames = append(tableNames, currName, nextName)
+	case 2:
+		nextName := nextIndexDBTableName()
+		tableNames = append(tableNames, nextName)
+	default:
 		tableNames = tableNames[len(tableNames)-3:]
 	}
 
