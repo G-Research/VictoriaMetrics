@@ -669,8 +669,8 @@ var indexItemsPool sync.Pool
 // SearchLabelNames returns all the label names, which match the given tfss on
 // the given tr.
 func (db *indexDB) SearchLabelNames(qt *querytracer.Tracer, accountID, projectID uint32, tfss []*TagFilters, tr TimeRange,
-	maxLabelNames, maxMetrics int, deadline uint64) ([]string, error) {
-
+	maxLabelNames, maxMetrics int, deadline uint64,
+) ([]string, error) {
 	qt = qt.NewChild("search for label names: filters=%s, timeRange=%s, maxLabelNames=%d, maxMetrics=%d", tfss, &tr, maxLabelNames, maxMetrics)
 	defer qt.Done()
 
@@ -1017,7 +1017,8 @@ func (is *indexSearch) searchTenantsOnDate(tenants map[string]struct{}, date uin
 
 // SearchLabelValues returns label values for the given labelName, tfss and tr.
 func (db *indexDB) SearchLabelValues(qt *querytracer.Tracer, accountID, projectID uint32, labelName string, tfss []*TagFilters, tr TimeRange,
-	maxLabelValues, maxMetrics int, deadline uint64) ([]string, error) {
+	maxLabelValues, maxMetrics int, deadline uint64,
+) ([]string, error) {
 	qt = qt.NewChild("search for label values: labelName=%q, filters=%s, timeRange=%s, maxLabelNames=%d, maxMetrics=%d", labelName, tfss, &tr, maxLabelValues, maxMetrics)
 	defer qt.Done()
 
@@ -1057,7 +1058,8 @@ func (db *indexDB) SearchLabelValues(qt *querytracer.Tracer, accountID, projectI
 }
 
 func (is *indexSearch) searchLabelValuesWithFiltersOnTimeRange(qt *querytracer.Tracer, lvs map[string]struct{}, labelName string, tfss []*TagFilters,
-	tr TimeRange, maxLabelValues, maxMetrics int) error {
+	tr TimeRange, maxLabelValues, maxMetrics int,
+) error {
 	if tr == globalIndexTimeRange {
 		qtChild := qt.NewChild("search for label values in global index: labelName=%q, filters=%s", labelName, tfss)
 		err := is.searchLabelValuesWithFiltersOnDate(qtChild, lvs, labelName, tfss, globalIndexDate, maxLabelValues, maxMetrics)
@@ -1106,7 +1108,8 @@ func (is *indexSearch) searchLabelValuesWithFiltersOnTimeRange(qt *querytracer.T
 }
 
 func (is *indexSearch) searchLabelValuesWithFiltersOnDate(qt *querytracer.Tracer, lvs map[string]struct{}, labelName string, tfss []*TagFilters,
-	date uint64, maxLabelValues, maxMetrics int) error {
+	date uint64, maxLabelValues, maxMetrics int,
+) error {
 	filter, err := is.searchMetricIDsWithFiltersOnDate(qt, tfss, date, maxMetrics)
 	if err != nil {
 		return err
@@ -1226,7 +1229,8 @@ func (is *indexSearch) getLabelValuesForMetricIDs(qt *querytracer.Tracer, lvs ma
 //
 // If it returns maxTagValueSuffixes suffixes, then it is likely more than maxTagValueSuffixes suffixes is found.
 func (db *indexDB) SearchTagValueSuffixes(qt *querytracer.Tracer, accountID, projectID uint32, tr TimeRange, tagKey, tagValuePrefix string,
-	delimiter byte, maxTagValueSuffixes int, deadline uint64) ([]string, error) {
+	delimiter byte, maxTagValueSuffixes int, deadline uint64,
+) ([]string, error) {
 	qt = qt.NewChild("search tag value suffixes for accountID=%d, projectID=%d, timeRange=%s, tagKey=%q, tagValuePrefix=%q, delimiter=%c, maxTagValueSuffixes=%d",
 		accountID, projectID, &tr, tagKey, tagValuePrefix, delimiter, maxTagValueSuffixes)
 	defer qt.Done()
@@ -3166,7 +3170,8 @@ func (is *indexSearch) hasMetricIDNoExtDB(metricID uint64, accountID, projectID 
 }
 
 func (is *indexSearch) getMetricIDsForDateTagFilter(qt *querytracer.Tracer, tf *tagFilter, date uint64, commonPrefix []byte,
-	maxMetrics int, maxLoopsCount int64) (*uint64set.Set, int64, error) {
+	maxMetrics int, maxLoopsCount int64,
+) (*uint64set.Set, int64, error) {
 	if qt.Enabled() {
 		qt = qt.NewChild("get metric ids for filter and date: filter={%s}, date=%s, maxMetrics=%d, maxLoopsCount=%d", tf, dateToString(date), maxMetrics, maxLoopsCount)
 		defer qt.Done()

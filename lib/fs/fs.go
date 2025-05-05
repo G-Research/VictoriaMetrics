@@ -128,7 +128,7 @@ func MustMkdirFailIfExist(path string) {
 }
 
 func mustMkdirSync(path string) {
-	if err := os.MkdirAll(path, 0o755); err != nil {
+	if err := os.MkdirAll(path, 0755); err != nil {
 		logger.Panicf("FATAL: cannot create directory: %s", err)
 	}
 	// Sync the parent directory, so the created directory becomes visible

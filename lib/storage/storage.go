@@ -211,7 +211,6 @@ func MustOpenStorage(path string, opts OpenOptions) *Storage {
 		stopCh:         make(chan struct{}),
 	}
 	fs.MustMkdirIfNotExist(path)
-	fs.MustMkdirIfNotExist(s.cachePath)
 
 	// Check whether the cache directory must be removed
 	// It is removed if it contains resetCacheOnStartupFilename.
@@ -330,98 +329,6 @@ func MustOpenStorage(path string, opts OpenOptions) *Storage {
 	s.startCurrHourMetricIDsUpdater()
 	s.startNextDayMetricIDsUpdater()
 	s.startRetentionWatcher()
-
-	return s
-}
-
-func MustOpenStorageReadOnly(path string, cachePath string) *Storage {
-	retention := time.Second * 12
-	path, err := filepath.Abs(path)
-	if err != nil {
-		logger.Panicf("FATAL: cannot determine absolute path for %q: %s", path, err)
-	}
-
-	if cachePath == "" {
-		cachePath = filepath.Join(path, cacheDirname)
-	} else {
-		cachePath, err = filepath.Abs(cachePath)
-		if err != nil {
-			logger.Panicf("FATAL: cannot determine absolute path for %q: %s", cachePath, err)
-		}
-	}
-
-	s := &Storage{
-		path:           path,
-		cachePath:      cachePath,
-		retentionMsecs: int64(retentionMax),
-		stopCh:         make(chan struct{}),
-	}
-
-	// Load caches.
-	mem := memory.Allowed()
-	s.tsidCache = s.mustLoadCache("metricName_tsid", getTSIDCacheSize())
-	s.metricIDCache = s.mustLoadCache("metricID_tsid", mem/16)
-	s.metricNameCache = s.mustLoadCache("metricID_metricName", mem/10)
-	s.dateMetricIDCache = newDateMetricIDCache()
-
-	hour := fasttime.UnixHour()
-	hmCurr := s.mustLoadHourMetricIDs(hour, "curr_hour_metric_ids")
-	hmPrev := s.mustLoadHourMetricIDs(hour-1, "prev_hour_metric_ids")
-	s.currHourMetricIDs.Store(hmCurr)
-	s.prevHourMetricIDs.Store(hmPrev)
-
-	s.pendingNextDayMetricIDs = &uint64set.Set{}
-
-	s.prefetchedMetricIDs = &uint64set.Set{}
-
-	// Load metadata
-	metadataDir := filepath.Join(path, metadataDirname)
-	isEmptyDB := !fs.IsPathExist(filepath.Join(path, indexdbDirname))
-	if !fs.IsPathExist(metadataDir) {
-		logger.Fatalf("FATAL: metadata dir %q must exist", metadataDir)
-	}
-	s.minTimestampForCompositeIndex = mustGetMinTimestampForCompositeIndex(metadataDir, isEmptyDB)
-
-	// Load indexdb
-	idbPath := filepath.Join(path, indexdbDirname)
-	idbNext, idbCurr, idbPrev := s.mustOpenIndexDBTablesReadOnly(idbPath)
-
-	idbCurr.SetExtDB(idbPrev)
-	idbNext.SetExtDB(idbCurr)
-
-	s.idbCurr.Store(idbCurr)
-	s.idbNext.Store(idbNext)
-
-	// Initialize nextRotationTimestamp
-	nowSecs := int64(fasttime.UnixTimestamp())
-	retentionSecs := retention.Milliseconds() / 1000 // not .Seconds() because unnecessary float64 conversion
-	nextRotationTimestamp := nextRetentionDeadlineSeconds(nowSecs, retentionSecs, retentionTimezoneOffsetSecs)
-	s.nextRotationTimestamp.Store(nextRotationTimestamp)
-
-	// Load nextDayMetricIDs cache
-	date := fasttime.UnixDate()
-	nextDayMetricIDs := s.mustLoadNextDayMetricIDs(idbCurr.generation, date)
-	s.nextDayMetricIDs.Store(nextDayMetricIDs)
-
-	// Load deleted metricIDs from idbCurr and idbPrev
-	dmisCurr, err := idbCurr.loadDeletedMetricIDs()
-	if err != nil {
-		logger.Panicf("FATAL: cannot load deleted metricIDs for the current indexDB at %q: %s", path, err)
-	}
-	dmisPrev, err := idbPrev.loadDeletedMetricIDs()
-	if err != nil {
-		logger.Panicf("FATAL: cannot load deleted metricIDs for the previous indexDB at %q: %s", path, err)
-	}
-	s.setDeletedMetricIDs(dmisCurr)
-	s.updateDeletedMetricIDs(dmisPrev)
-
-	// Load data
-	tablePath := filepath.Join(path, dataDirname)
-	tb := mustOpenTableReadOnly(tablePath, s)
-	s.tb = tb
-
-	s.startCurrHourMetricIDsUpdater()
-	s.startNextDayMetricIDsUpdater()
 
 	return s
 }
@@ -1065,22 +972,6 @@ func (s *Storage) resetAndSaveTSIDCache() {
 	s.mustSaveCache(s.tsidCache, "metricName_tsid")
 }
 
-func (s *Storage) CloseReadOnly() {
-	close(s.stopCh)
-
-	s.freeDiskSpaceWatcherWG.Wait()
-	s.retentionWatcherWG.Wait()
-	s.currHourMetricIDsUpdaterWG.Wait()
-	s.nextDayMetricIDsUpdaterWG.Wait()
-
-	s.mustSaveCache(s.tsidCache, "metricName_tsid")
-	s.tsidCache.Stop()
-	s.mustSaveCache(s.metricIDCache, "metricID_tsid")
-	s.metricIDCache.Stop()
-	s.mustSaveCache(s.metricNameCache, "metricID_metricName")
-	s.metricNameCache.Stop()
-}
-
 // MustClose closes the storage.
 //
 // It is expected that the s is no longer used during the close.
@@ -1259,7 +1150,7 @@ func (s *Storage) mustSaveNextDayMetricIDs(e *byDateMetricIDEntry) {
 	// Marshal e.v
 	dst = marshalUint64Set(dst, &e.v)
 
-	if err := os.WriteFile(path, dst, 0644); err != nil {
+	if err := os.WriteFile(path, dst, 0o644); err != nil {
 		logger.Panicf("FATAL: cannot write %d bytes to %q: %s", len(dst), path, err)
 	}
 }
@@ -3176,54 +3067,6 @@ func (s *Storage) mustOpenIndexDBTables(path string) (next, curr, prev *indexDB)
 		}
 		fs.MustSyncPath(path)
 
-		tableNames = tableNames[len(tableNames)-3:]
-	}
-
-	// Open tables
-	nextPath := filepath.Join(path, tableNames[2])
-	currPath := filepath.Join(path, tableNames[1])
-	prevPath := filepath.Join(path, tableNames[0])
-
-	next = mustOpenIndexDB(nextPath, s, &s.isReadOnly)
-	curr = mustOpenIndexDB(currPath, s, &s.isReadOnly)
-	prev = mustOpenIndexDB(prevPath, s, &s.isReadOnly)
-
-	return next, curr, prev
-}
-
-func (s *Storage) mustOpenIndexDBTablesReadOnly(path string) (next, curr, prev *indexDB) {
-	// Search for the three most recent tables - the prev, curr and next.
-	des := fs.MustReadDir(path)
-	var tableNames []string
-	for _, de := range des {
-		if !fs.IsDirOrSymlink(de) {
-			// Skip non-directories.
-			continue
-		}
-		tableName := de.Name()
-		if !indexDBTableNameRegexp.MatchString(tableName) {
-			// Skip invalid directories.
-			continue
-		}
-		tableNames = append(tableNames, tableName)
-	}
-	sort.Slice(tableNames, func(i, j int) bool {
-		return tableNames[i] < tableNames[j]
-	})
-	switch len(tableNames) {
-	case 0:
-		prevName := nextIndexDBTableName()
-		currName := nextIndexDBTableName()
-		nextName := nextIndexDBTableName()
-		tableNames = append(tableNames, prevName, currName, nextName)
-	case 1:
-		currName := nextIndexDBTableName()
-		nextName := nextIndexDBTableName()
-		tableNames = append(tableNames, currName, nextName)
-	case 2:
-		nextName := nextIndexDBTableName()
-		tableNames = append(tableNames, nextName)
-	default:
 		tableNames = tableNames[len(tableNames)-3:]
 	}
 

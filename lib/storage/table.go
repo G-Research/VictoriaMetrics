@@ -127,53 +127,6 @@ func mustOpenTable(path string, s *Storage) *table {
 	return tb
 }
 
-func mustOpenTableReadOnly(path string, s *Storage) *table {
-	path = filepath.Clean(path)
-
-	// Create a directory for the table if it doesn't exist yet.
-	if !fs.IsPathExist(path) {
-		logger.Panicf("FATAL: table path %q must exist", path)
-	}
-
-	smallPartitionsPath := filepath.Join(path, smallDirname)
-	bigPartitionsPath := filepath.Join(path, bigDirname)
-
-	// Open partitions.
-	pts := mustOpenPartitions(smallPartitionsPath, bigPartitionsPath, s)
-
-	tb := &table{
-		path:                path,
-		smallPartitionsPath: smallPartitionsPath,
-		bigPartitionsPath:   bigPartitionsPath,
-		s:                   s,
-
-		stopCh: make(chan struct{}),
-	}
-	for _, pt := range pts {
-		tb.addPartitionNolock(pt)
-	}
-
-	// source partitions from the disk every 5 seconds
-	go func() {
-		for {
-			select {
-			case <-tb.stopCh:
-				return
-			case <-time.After(5 * time.Second):
-				// Do nothing. This is just to prevent the goroutine from exiting immediately.
-				tb.ptwsLock.Lock()
-				pts := mustOpenPartitionsReadOnly(smallPartitionsPath, bigPartitionsPath, s)
-				for _, pt := range pts {
-					tb.addPartitionNolock(pt)
-				}
-				tb.ptwsLock.Unlock()
-			}
-		}
-	}()
-
-	return tb
-}
-
 // MustCreateSnapshot creates tb snapshot and returns paths to small and big parts of it.
 func (tb *table) MustCreateSnapshot(snapshotName string) (string, string) {
 	logger.Infof("creating table snapshot of %q...", tb.path)
@@ -596,44 +549,6 @@ func mustOpenPartitions(smallPartitionsPath, bigPartitionsPath string, s *Storag
 			smallPartsPath := filepath.Join(smallPartitionsPath, ptName)
 			bigPartsPath := filepath.Join(bigPartitionsPath, ptName)
 			pt := mustOpenPartition(smallPartsPath, bigPartsPath, s)
-
-			ptsLock.Lock()
-			pts = append(pts, pt)
-			ptsLock.Unlock()
-		}(ptName)
-	}
-	wg.Wait()
-
-	return pts
-}
-
-func mustOpenPartitionsReadOnly(smallPartitionsPath, bigPartitionsPath string, s *Storage) []*partition {
-	// Certain partition directories in either `big` or `small` dir may be missing
-	// after restoring from backup. So populate partition names from both dirs.
-	ptNames := make(map[string]bool)
-	mustPopulatePartitionNames(smallPartitionsPath, ptNames)
-	mustPopulatePartitionNames(bigPartitionsPath, ptNames)
-	var pts []*partition
-	var ptsLock sync.Mutex
-
-	// Open partitions in parallel. This should reduce the time needed for opening multiple partitions.
-	var wg sync.WaitGroup
-	concurrencyLimiterCh := make(chan struct{}, cgroup.AvailableCPUs())
-	for ptName := range ptNames {
-		wg.Add(1)
-		concurrencyLimiterCh <- struct{}{}
-		go func(ptName string) {
-			defer func() {
-				<-concurrencyLimiterCh
-				wg.Done()
-			}()
-
-			smallPartsPath := filepath.Join(smallPartitionsPath, ptName)
-			bigPartsPath := filepath.Join(bigPartitionsPath, ptName)
-			pt := mustOpenPartitionReadOnly(smallPartsPath, bigPartsPath, s)
-			if pt == nil {
-				return
-			}
 
 			ptsLock.Lock()
 			pts = append(pts, pt)

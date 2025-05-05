@@ -267,35 +267,6 @@ func mustOpenPartition(smallPartsPath, bigPartsPath string, s *Storage) *partiti
 	return pt
 }
 
-func mustOpenPartitionReadOnly(smallPartsPath, bigPartsPath string, s *Storage) *partition {
-	smallPartsPath = filepath.Clean(smallPartsPath)
-	bigPartsPath = filepath.Clean(bigPartsPath)
-
-	name := filepath.Base(smallPartsPath)
-	if !strings.HasSuffix(bigPartsPath, name) {
-		logger.Panicf("FATAL: partition name in bigPartsPath %q doesn't match smallPartsPath %q; want %q", bigPartsPath, smallPartsPath, name)
-	}
-
-	partsFile := filepath.Join(smallPartsPath, partsFilename)
-	partNamesSmall, partNamesBig := mustReadPartNames(partsFile, smallPartsPath, bigPartsPath)
-
-	smallParts := mustOpenPartsReadOnly(partsFile, smallPartsPath, partNamesSmall)
-	bigParts := mustOpenPartsReadOnly(partsFile, bigPartsPath, partNamesBig)
-
-	if !fs.IsPathExist(partsFile) {
-		return nil
-	}
-
-	pt := newPartition(name, smallPartsPath, bigPartsPath, s)
-	pt.smallParts = smallParts
-	pt.bigParts = bigParts
-	if err := pt.tr.fromPartitionName(name); err != nil {
-		logger.Panicf("FATAL: cannot obtain partition time range from smallPartsPath %q: %s", smallPartsPath, err)
-	}
-
-	return pt
-}
-
 func newPartition(name, smallPartsPath, bigPartsPath string, s *Storage) *partition {
 	p := &partition{
 		name:           name,
@@ -1983,43 +1954,6 @@ func mustOpenParts(partsFile, path string, partNames []string) []*partWrapper {
 	for _, partName := range partNames {
 		partPath := filepath.Join(path, partName)
 		p := mustOpenFilePart(partPath)
-		pw := &partWrapper{
-			p: p,
-		}
-		pw.incRef()
-		pws = append(pws, pw)
-	}
-
-	return pws
-}
-
-func mustOpenPartsReadOnly(partsFile, path string, partNames []string) []*partWrapper {
-	if !fs.IsPathExist(path) {
-		return nil
-	}
-
-	m := make(map[string]struct{}, len(partNames))
-	for _, partName := range partNames {
-		// Make sure the partName exists on disk.
-		// If it is missing, then manual action from the user is needed,
-		// since this is unexpected state, which cannot occur under normal operation,
-		// including unclean shutdown.
-		partPath := filepath.Join(path, partName)
-		if !fs.IsPathExist(partPath) {
-			continue
-		}
-
-		m[partName] = struct{}{}
-	}
-
-	// Open parts
-	var pws []*partWrapper
-	for _, partName := range partNames {
-		partPath := filepath.Join(path, partName)
-		p, err := tryOpenFilePart(partPath)
-		if err != nil {
-			logger.Infof("Failed to open part %q: %s, skipping", partPath, err)
-		}
 		pw := &partWrapper{
 			p: p,
 		}
