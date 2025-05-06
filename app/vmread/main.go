@@ -47,6 +47,7 @@ func main() {
 
 	readOnlyStorage := storage.NewReadOnlyStorage(&storage.ReadOnlyConfig{
 		Retention:          retentionPeriod.Duration(),
+		CachePath:          *cacheDataPath,
 		StoragePath:        *storageDataPath,
 		DisablePerDayIndex: *disablePerDayIndex,
 	})

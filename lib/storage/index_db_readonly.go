@@ -16,7 +16,6 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
@@ -186,10 +185,6 @@ func (db *indexDBReadOnly) decRef() {
 	if !db.mustDrop.Load() {
 		return
 	}
-
-	logger.Infof("dropping indexDBReadOnly %q", tbPath)
-	fs.MustRemoveDirAtomic(tbPath)
-	logger.Infof("indexDBReadOnly %q has been dropped", tbPath)
 }
 
 func (db *indexDBReadOnly) getMetricIDsFromTagFiltersCache(qt *querytracer.Tracer, key []byte) ([]uint64, bool) {
@@ -259,32 +254,6 @@ func (db *indexDBReadOnly) getMetricNameFromCache(dst []byte, metricID uint64) [
 func (db *indexDBReadOnly) putMetricNameToCache(metricID uint64, metricName []byte) {
 	key := (*[unsafe.Sizeof(metricID)]byte)(unsafe.Pointer(&metricID))
 	db.s.metricNameCache.Set(key[:], metricName)
-}
-
-func marshalTagFiltersKey(dst []byte, tfss []*TagFilters, tr TimeRange, versioned bool) []byte {
-	// There is no need in versioning the tagFilters key, since the tagFiltersToMetricIDsCache
-	// isn't persisted to disk (it is very volatile because of tagFiltersKeyGen).
-	prefix := ^uint64(0)
-	if versioned {
-		prefix = tagFiltersKeyGen.Load()
-	}
-	// Round start and end times to per-day granularity according to per-day inverted index.
-	startDate, endDate := tr.DateRange()
-	dst = encoding.MarshalUint64(dst, prefix)
-	dst = encoding.MarshalUint64(dst, startDate)
-	dst = encoding.MarshalUint64(dst, endDate)
-	if len(tfss) == 0 {
-		return dst
-	}
-	dst = encoding.MarshalUint32(dst, tfss[0].accountID)
-	dst = encoding.MarshalUint32(dst, tfss[0].projectID)
-	for _, tfs := range tfss {
-		dst = append(dst, 0) // separator between tfs groups.
-		for i := range tfs.tfs {
-			dst = tfs.tfs[i].MarshalNoAccountIDProjectID(dst)
-		}
-	}
-	return dst
 }
 
 // getTSIDByMetricName fills the dst with TSID for the given metricName at the given date.
@@ -1566,34 +1535,6 @@ func (db *indexDBReadOnly) searchMetricIDs(qt *querytracer.Tracer, tfss []*TagFi
 	return metricIDs, nil
 }
 
-func mergeSortedMetricIDs(a, b []uint64) []uint64 {
-	if len(b) == 0 {
-		return a
-	}
-	i := 0
-	j := 0
-	result := make([]uint64, 0, len(a)+len(b))
-	for {
-		next := b[j]
-		start := i
-		for i < len(a) && a[i] <= next {
-			i++
-		}
-		result = append(result, a[start:i]...)
-		if len(result) > 0 {
-			last := result[len(result)-1]
-			for j < len(b) && b[j] == last {
-				j++
-			}
-		}
-		if i == len(a) {
-			return append(result, b[j:]...)
-		}
-		a, b = b, a
-		i, j = j, i
-	}
-}
-
 func (db *indexDBReadOnly) getTSIDsFromMetricIDs(qt *querytracer.Tracer, accountID, projectID uint32, metricIDs []uint64, deadline uint64) ([]TSID, error) {
 	qt = qt.NewChild("obtain tsids from %d metricIDs", len(metricIDs))
 	defer qt.Done()
@@ -1693,8 +1634,6 @@ func (db *indexDBReadOnly) getTSIDsFromMetricIDs(qt *querytracer.Tracer, account
 	qt.Printf("sort %d tsids", len(tsids))
 	return tsids, nil
 }
-
-var tagFiltersKeyBufPool bytesutil.ByteBufferPool
 
 func (is *indexSearchReadOnly) getTSIDByMetricNameNoExtDB(dst *TSID, metricName []byte, date uint64) bool {
 	dmis := is.db.s.getDeletedMetricIDs()
@@ -1907,58 +1846,6 @@ func (is *indexSearchReadOnly) updateMetricIDsByMetricNameMatch(qt *querytracer.
 	}
 	qt.Printf("apply filters %s; resulting metric ids: %d", tfs, metricIDs.Len())
 	return nil
-}
-
-func removeCompositeTagFilters(tfs []*tagFilter, prefix []byte) []*tagFilter {
-	if !hasCompositeTagFilters(tfs, prefix) {
-		return tfs
-	}
-	var tagKey []byte
-	var name []byte
-	tfsNew := make([]*tagFilter, 0, len(tfs)+1)
-	for _, tf := range tfs {
-		if !bytes.HasPrefix(tf.prefix, prefix) {
-			tfsNew = append(tfsNew, tf)
-			continue
-		}
-		suffix := tf.prefix[len(prefix):]
-		var err error
-		_, tagKey, err = unmarshalTagValue(tagKey[:0], suffix)
-		if err != nil {
-			logger.Panicf("BUG: cannot unmarshal tag key from suffix=%q: %s", suffix, err)
-		}
-		if len(tagKey) == 0 || tagKey[0] != compositeTagKeyPrefix {
-			tfsNew = append(tfsNew, tf)
-			continue
-		}
-		tagKey = tagKey[1:]
-		nameLen, nSize := encoding.UnmarshalVarUint64(tagKey)
-		if nSize <= 0 {
-			logger.Panicf("BUG: cannot unmarshal nameLen from tagKey %q", tagKey)
-		}
-		tagKey = tagKey[nSize:]
-		if nameLen == 0 {
-			logger.Panicf("BUG: nameLen must be greater than 0")
-		}
-		if uint64(len(tagKey)) < nameLen {
-			logger.Panicf("BUG: expecting at %d bytes for name in tagKey=%q; got %d bytes", nameLen, tagKey, len(tagKey))
-		}
-		name = append(name[:0], tagKey[:nameLen]...)
-		tagKey = tagKey[nameLen:]
-		var tfNew tagFilter
-		if err := tfNew.Init(prefix, tagKey, tf.value, tf.isNegative, tf.isRegexp); err != nil {
-			logger.Panicf("BUG: cannot initialize {%s=%q} filter: %s", tagKey, tf.value, err)
-		}
-		tfsNew = append(tfsNew, &tfNew)
-	}
-	if len(name) > 0 {
-		var tfNew tagFilter
-		if err := tfNew.Init(prefix, nil, name, false, false); err != nil {
-			logger.Panicf("BUG: unexpected error when initializing {__name__=%q} filter: %s", name, err)
-		}
-		tfsNew = append(tfsNew, &tfNew)
-	}
-	return tfsNew
 }
 
 func (is *indexSearchReadOnly) searchMetricIDsWithFiltersOnDate(qt *querytracer.Tracer, tfss []*TagFilters, date uint64, maxMetrics int) (*uint64set.Set, error) {
