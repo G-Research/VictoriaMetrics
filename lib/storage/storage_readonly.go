@@ -1,11 +1,13 @@
 package storage
 
 import (
+	"os"
 	"path/filepath"
 	"sort"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 )
 
 type ReadOnlyConfig struct {
@@ -18,6 +20,9 @@ type ReadOnlyStorage struct {
 	retentionMsecs     int64
 	storagePath        string
 	disablePerDayIndex bool
+
+	// The minimum timestamp when composite index search can be used.
+	minTimestampForCompositeIndex int64
 }
 
 func NewReadOnlyStorage(cfg *ReadOnlyConfig) *ReadOnlyStorage {
@@ -51,7 +56,7 @@ func (s *ReadOnlyStorage) adjustTimeRange(tr TimeRange) TimeRange {
 	return tr
 }
 
-func (s *ReadOnlyStorage) mustOpenIndexDBTables(path string) (next, curr, prev *indexDB) {
+func (s *ReadOnlyStorage) mustOpenIndexDBTables(path string) *indexDBReadOnly {
 	// Search for the three most recent tables - the prev, curr and next.
 	des := fs.MustReadDir(path)
 	var tableNames []string
@@ -87,14 +92,28 @@ func (s *ReadOnlyStorage) mustOpenIndexDBTables(path string) (next, curr, prev *
 		tableNames = tableNames[len(tableNames)-3:]
 	}
 
-	// Open tables
-	nextPath := filepath.Join(path, tableNames[2])
 	currPath := filepath.Join(path, tableNames[1])
-	prevPath := filepath.Join(path, tableNames[0])
 
-	next = mustOpenIndexDB(nextPath, s, &s.isReadOnly)
-	curr = mustOpenIndexDB(currPath, s, &s.isReadOnly)
-	prev = mustOpenIndexDB(prevPath, s, &s.isReadOnly)
+	return openReadOnlyIndexDB(currPath, s)
+}
 
-	return next, curr, prev
+func getMinTimestampForCompositeIndex(metadataDir string, isEmptyDB bool) int64 {
+	path := filepath.Join(metadataDir, "minTimestampForCompositeIndex")
+	minTimestamp, err := loadMinTimestampForCompositeIndex(path)
+	if err == nil {
+		return minTimestamp
+	}
+	if !os.IsNotExist(err) {
+		logger.Errorf("cannot read minTimestampForCompositeIndex, so trying to re-create it; error: %s", err)
+	}
+	date := time.Now().UnixNano() / 1e6 / msecPerDay
+	if !isEmptyDB {
+		// The current and the next day can already contain non-composite indexes,
+		// so they cannot be queried with composite indexes.
+		date += 2
+	} else {
+		date = 0
+	}
+	minTimestamp = date * msecPerDay
+	return minTimestamp
 }

@@ -86,7 +86,7 @@ func (s *ReadOnlySearch) Init(qt *querytracer.Tracer, storage *ReadOnlyStorage, 
 	s.reset()
 
 	idbPath := filepath.Join(storage.storagePath, indexdbDirname)
-	idb
+	idb := openReadOnlyIndexDB(idbPath, storage)
 
 	s.retentionDeadline = retentionDeadline
 	s.tr = tr
@@ -95,7 +95,7 @@ func (s *ReadOnlySearch) Init(qt *querytracer.Tracer, storage *ReadOnlyStorage, 
 	s.needClosing = true
 
 	var tsids []TSID
-	metricIDs, err := s.idb.searchMetricIDs(qt, tfss, indexTR, maxMetrics, deadline)
+	metricIDs, err := idb.searchMetricIDs(qt, tfss, indexTR, maxMetrics, deadline)
 	if err == nil && len(metricIDs) > 0 && len(tfss) > 0 {
 		accountID := tfss[0].accountID
 		projectID := tfss[0].projectID
