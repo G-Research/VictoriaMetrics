@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +13,9 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/querytracer"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/storage/metricnamestats"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/timeutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/uint64set"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/workingsetcache"
 )
@@ -28,6 +32,8 @@ type ReadOnlyStorage struct {
 	cachePath          string
 	storagePath        string
 	disablePerDayIndex bool
+
+	tb *readOnlyTable
 
 	// The minimum timestamp when composite index search can be used.
 	minTimestampForCompositeIndex int64
@@ -57,6 +63,15 @@ type ReadOnlyStorage struct {
 	missingMetricIDsLock          sync.Mutex
 	missingMetricIDs              map[uint64]uint64
 	missingMetricIDsResetDeadline uint64
+
+	// prefetchedMetricIDs contains metricIDs for pre-fetched metricNames in the prefetchMetricNames function.
+	prefetchedMetricIDsLock sync.Mutex
+	prefetchedMetricIDs     *uint64set.Set
+
+	// prefetchedMetricIDsDeadline is used for periodic reset of prefetchedMetricIDs in order to limit its size under high rate of creating new series.
+	prefetchedMetricIDsDeadline atomic.Uint64
+
+	metricsTracker *metricnamestats.Tracker
 }
 
 func NewReadOnlyStorage(cfg *ReadOnlyConfig) *ReadOnlyStorage {
@@ -78,6 +93,10 @@ func NewReadOnlyStorage(cfg *ReadOnlyConfig) *ReadOnlyStorage {
 	s.metricIDCache = s.mustLoadCache("metricID_tsid", mem/16)
 	s.metricNameCache = s.mustLoadCache("metricID_metricName", mem/10)
 	s.dateMetricIDCache = newDateMetricIDCache()
+
+	tablePath := filepath.Join(cfg.StoragePath, dataDirname)
+	tb := mustOpenReadOnlyTable(tablePath, s)
+	s.tb = tb
 
 	return s
 }
@@ -233,4 +252,84 @@ func (s *ReadOnlyStorage) wasMetricIDMissingBefore(metricID uint64) bool {
 		s.missingMetricIDs[metricID] = deleteDeadline
 	}
 	return ct > deleteDeadline
+}
+
+func (s *ReadOnlyStorage) prefetchMetricNames(qt *querytracer.Tracer, idb *indexDBReadOnly, accountID, projectID uint32, srcMetricIDs []uint64, deadline uint64) error {
+	qt = qt.NewChild("prefetch metric names for %d metricIDs", len(srcMetricIDs))
+	defer qt.Done()
+
+	if len(srcMetricIDs) < 500 {
+		qt.Printf("skip pre-fetching metric names for low number of metric ids=%d", len(srcMetricIDs))
+		return nil
+	}
+
+	var metricIDs []uint64
+	s.prefetchedMetricIDsLock.Lock()
+	prefetchedMetricIDs := s.prefetchedMetricIDs
+	for _, metricID := range srcMetricIDs {
+		if prefetchedMetricIDs.Has(metricID) {
+			continue
+		}
+		metricIDs = append(metricIDs, metricID)
+	}
+	s.prefetchedMetricIDsLock.Unlock()
+
+	qt.Printf("%d out of %d metric names must be pre-fetched", len(metricIDs), len(srcMetricIDs))
+	if len(metricIDs) < 500 {
+		// It is cheaper to skip pre-fetching and obtain metricNames inline.
+		qt.Printf("skip pre-fetching metric names for low number of missing metric ids=%d", len(metricIDs))
+		return nil
+	}
+	// s.slowMetricNameLoads.Add(uint64(len(metricIDs)))
+
+	// Pre-fetch metricIDs.
+	var missingMetricIDs []uint64
+	var metricName []byte
+	var err error
+	is := idb.getIndexSearch(accountID, projectID, deadline)
+	defer idb.putIndexSearch(is)
+	for loops, metricID := range metricIDs {
+		if loops&paceLimiterSlowIterationsMask == 0 {
+			if err := checkSearchDeadlineAndPace(is.deadline); err != nil {
+				return err
+			}
+		}
+		var ok bool
+		metricName, ok = is.searchMetricNameWithCache(metricName[:0], metricID)
+		if !ok {
+			missingMetricIDs = append(missingMetricIDs, metricID)
+			continue
+		}
+	}
+	idb.doExtDB(func(extDB *indexDBReadOnly) {
+		is := extDB.getIndexSearch(accountID, projectID, deadline)
+		defer extDB.putIndexSearch(is)
+		for loops, metricID := range missingMetricIDs {
+			if loops&paceLimiterSlowIterationsMask == 0 {
+				if err = checkSearchDeadlineAndPace(is.deadline); err != nil {
+					return
+				}
+			}
+			metricName, _ = is.searchMetricNameWithCache(metricName[:0], metricID)
+		}
+	})
+	if err != nil && err != io.EOF {
+		return err
+	}
+	qt.Printf("pre-fetch metric names for %d metric ids", len(metricIDs))
+
+	// Store the pre-fetched metricIDs, so they aren't pre-fetched next time.
+	s.prefetchedMetricIDsLock.Lock()
+	if fasttime.UnixTimestamp() > s.prefetchedMetricIDsDeadline.Load() {
+		// Periodically reset the prefetchedMetricIDs in order to limit its size.
+		s.prefetchedMetricIDs = &uint64set.Set{}
+		d := timeutil.AddJitterToDuration(time.Second * 20 * 60)
+		metricIDsDeadline := fasttime.UnixTimestamp() + uint64(d.Seconds())
+		s.prefetchedMetricIDsDeadline.Store(metricIDsDeadline)
+	}
+	s.prefetchedMetricIDs.AddMulti(metricIDs)
+	s.prefetchedMetricIDsLock.Unlock()
+
+	qt.Printf("cache metric ids for pre-fetched metric names")
+	return nil
 }

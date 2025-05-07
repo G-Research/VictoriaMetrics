@@ -15,12 +15,10 @@ type ReadOnlySearch struct {
 	// MetricBlockRef is updated with each Search.NextMetricBlock call.
 	MetricBlockRef MetricBlockRef
 
-	// idb is used for MetricName lookup for the found data blocks.
-	idb *indexDB
+	tb *readOnlyTable
 
-	// putIndexDB decrements the idb ref counter. Must be called in
-	// Search.MustClose().
-	putIndexDB func()
+	// idb is used for MetricName lookup for the found data blocks.
+	idb *indexDBReadOnly
 
 	// retentionDeadline is used for filtering out blocks outside the configured retention.
 	retentionDeadline int64
@@ -53,7 +51,6 @@ func (s *ReadOnlySearch) reset() {
 	s.MetricBlockRef.BlockRef = nil
 
 	s.idb = nil
-	s.putIndexDB = nil
 	s.retentionDeadline = 0
 	s.ts.reset()
 	s.tr = TimeRange{}
@@ -86,8 +83,7 @@ func (s *ReadOnlySearch) Init(qt *querytracer.Tracer, storage *ReadOnlyStorage, 
 	s.reset()
 
 	idbPath := filepath.Join(storage.storagePath, indexdbDirname)
-	idb := openReadOnlyIndexDB(idbPath, storage)
-
+	s.idb = openReadOnlyIndexDB(idbPath, storage)
 	s.retentionDeadline = retentionDeadline
 	s.tr = tr
 	s.tfss = tfss
@@ -95,7 +91,7 @@ func (s *ReadOnlySearch) Init(qt *querytracer.Tracer, storage *ReadOnlyStorage, 
 	s.needClosing = true
 
 	var tsids []TSID
-	metricIDs, err := idb.searchMetricIDs(qt, tfss, indexTR, maxMetrics, deadline)
+	metricIDs, err := s.idb.searchMetricIDs(qt, tfss, indexTR, maxMetrics, deadline)
 	if err == nil && len(metricIDs) > 0 && len(tfss) > 0 {
 		accountID := tfss[0].accountID
 		projectID := tfss[0].projectID
@@ -122,7 +118,6 @@ func (s *ReadOnlySearch) MustClose() {
 		logger.Panicf("BUG: missing Init call before MustClose")
 	}
 	s.ts.MustClose()
-	s.putIndexDB()
 	s.reset()
 }
 

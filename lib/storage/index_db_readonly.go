@@ -67,7 +67,7 @@ type indexDBReadOnly struct {
 	generation uint64
 
 	name string
-	tb   *mergeset.Table
+	tb   *mergeset.TableReadOnly
 
 	extDB     *indexDBReadOnly
 	extDBLock sync.Mutex
@@ -169,8 +169,6 @@ func (db *indexDBReadOnly) decRef() {
 		return
 	}
 
-	tbPath := db.tb.Path()
-	db.tb.MustClose()
 	db.tb = nil
 	db.SetExtDB(nil)
 
