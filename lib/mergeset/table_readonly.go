@@ -10,8 +10,8 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 )
 
-// TableReadOnly represents mergeset table.
-type TableReadOnly struct {
+// ReadOnlyTable represents mergeset table.
+type ReadOnlyTable struct {
 	path string
 
 	// rawItems contains recently added items that haven't been converted to parts yet.
@@ -49,7 +49,7 @@ type TableReadOnly struct {
 // to persistent storage.
 //
 // The table is created if it doesn't exist yet.
-func MustOpenTableReadOnly(path string, flushInterval time.Duration, flushCallback func(), prepareBlock PrepareBlockCallback, isReadOnly *atomic.Bool) *TableReadOnly {
+func MustOpenTableReadOnly(path string, flushInterval time.Duration, flushCallback func(), prepareBlock PrepareBlockCallback, isReadOnly *atomic.Bool) *ReadOnlyTable {
 	path = filepath.Clean(path)
 
 	if flushInterval < pendingItemsFlushInterval {
@@ -61,7 +61,7 @@ func MustOpenTableReadOnly(path string, flushInterval time.Duration, flushCallba
 	// Open table parts.
 	pws := mustOpenParts(path)
 
-	tb := &TableReadOnly{
+	tb := &ReadOnlyTable{
 		path:      path,
 		fileParts: pws,
 		stopCh:    make(chan struct{}),
@@ -72,14 +72,14 @@ func MustOpenTableReadOnly(path string, flushInterval time.Duration, flushCallba
 }
 
 // Path returns the path to tb on the filesystem.
-func (tb *TableReadOnly) Path() string {
+func (tb *ReadOnlyTable) Path() string {
 	return tb.path
 }
 
 // getParts appends parts snapshot to dst and returns it.
 //
 // The appended parts must be released with putParts.
-func (tb *TableReadOnly) getParts(dst []*partWrapper) []*partWrapper {
+func (tb *ReadOnlyTable) getParts(dst []*partWrapper) []*partWrapper {
 	tb.partsLock.Lock()
 	for _, pw := range tb.inmemoryParts {
 		pw.incRef()
@@ -95,13 +95,13 @@ func (tb *TableReadOnly) getParts(dst []*partWrapper) []*partWrapper {
 }
 
 // putParts releases the given pws obtained via getParts.
-func (tb *TableReadOnly) putParts(pws []*partWrapper) {
+func (tb *ReadOnlyTable) putParts(pws []*partWrapper) {
 	for _, pw := range pws {
 		pw.decRef()
 	}
 }
 
-func (tb *TableReadOnly) getMaxFilePartSize() uint64 {
+func (tb *ReadOnlyTable) getMaxFilePartSize() uint64 {
 	n := fs.MustGetFreeSpace(tb.path)
 	// Divide free space by the max number of concurrent merges for file parts.
 	maxOutBytes := n / uint64(cap(filePartsConcurrencyCh))
@@ -111,7 +111,7 @@ func (tb *TableReadOnly) getMaxFilePartSize() uint64 {
 	return maxOutBytes
 }
 
-func (tb *TableReadOnly) releasePartsToMerge(pws []*partWrapper) {
+func (tb *ReadOnlyTable) releasePartsToMerge(pws []*partWrapper) {
 	tb.partsLock.Lock()
 	for _, pw := range pws {
 		if !pw.isInMerge {
@@ -122,7 +122,7 @@ func (tb *TableReadOnly) releasePartsToMerge(pws []*partWrapper) {
 	tb.partsLock.Unlock()
 }
 
-func (tb *TableReadOnly) openCreatedPart(pws []*partWrapper, mpNew *inmemoryPart, dstPartPath string) *partWrapper {
+func (tb *ReadOnlyTable) openCreatedPart(pws []*partWrapper, mpNew *inmemoryPart, dstPartPath string) *partWrapper {
 	// Open the created part from disk.
 	pNew := mustOpenFilePart(dstPartPath)
 	pwNew := &partWrapper{

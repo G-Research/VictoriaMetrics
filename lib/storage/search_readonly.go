@@ -18,12 +18,12 @@ type ReadOnlySearch struct {
 	tb *readOnlyTable
 
 	// idb is used for MetricName lookup for the found data blocks.
-	idb *indexDBReadOnly
+	idb *readOnlyIndexDB
 
 	// retentionDeadline is used for filtering out blocks outside the configured retention.
 	retentionDeadline int64
 
-	ts tableSearch
+	ts readOnlyTableSearch
 
 	// tr contains time range used in the search.
 	tr TimeRange
@@ -117,7 +117,6 @@ func (s *ReadOnlySearch) MustClose() {
 	if !s.needClosing {
 		logger.Panicf("BUG: missing Init call before MustClose")
 	}
-	s.ts.MustClose()
 	s.reset()
 }
 

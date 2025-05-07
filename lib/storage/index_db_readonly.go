@@ -24,8 +24,8 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/workingsetcache"
 )
 
-// indexDBReadOnly represents an index db.
-type indexDBReadOnly struct {
+// readOnlyIndexDB represents an index db.
+type readOnlyIndexDB struct {
 	// The number of references to indexDBReadOnly struct.
 	refCount atomic.Int32
 
@@ -67,9 +67,9 @@ type indexDBReadOnly struct {
 	generation uint64
 
 	name string
-	tb   *mergeset.TableReadOnly
+	tb   *mergeset.ReadOnlyTable
 
-	extDB     *indexDBReadOnly
+	extDB     *readOnlyIndexDB
 	extDBLock sync.Mutex
 
 	// Cache for fast TagFilters -> MetricIDs lookup.
@@ -85,7 +85,7 @@ type indexDBReadOnly struct {
 	indexSearchReadOnlyPool sync.Pool
 }
 
-func openReadOnlyIndexDB(path string, s *ReadOnlyStorage) *indexDBReadOnly {
+func openReadOnlyIndexDB(path string, s *ReadOnlyStorage) *readOnlyIndexDB {
 	if s == nil {
 		logger.Panicf("BUG: Storage must be non-nil")
 	}
@@ -100,7 +100,7 @@ func openReadOnlyIndexDB(path string, s *ReadOnlyStorage) *indexDBReadOnly {
 	mem := memory.Allowed()
 	tagFiltersCacheSize := getTagFiltersCacheSize()
 
-	db := &indexDBReadOnly{
+	db := &readOnlyIndexDB{
 		generation: gen,
 		name:       name,
 
@@ -116,7 +116,7 @@ func openReadOnlyIndexDB(path string, s *ReadOnlyStorage) *indexDBReadOnly {
 // doExtDB calls f for non-nil db.extDB.
 //
 // f isn't called if db.extDB is nil.
-func (db *indexDBReadOnly) doExtDB(f func(extDB *indexDBReadOnly)) {
+func (db *readOnlyIndexDB) doExtDB(f func(extDB *readOnlyIndexDB)) {
 	db.extDBLock.Lock()
 	extDB := db.extDB
 	if extDB != nil {
@@ -130,7 +130,7 @@ func (db *indexDBReadOnly) doExtDB(f func(extDB *indexDBReadOnly)) {
 }
 
 // hasExtDB returns true if db.extDB != nil
-func (db *indexDBReadOnly) hasExtDB() bool {
+func (db *readOnlyIndexDB) hasExtDB() bool {
 	db.extDBLock.Lock()
 	ok := db.extDB != nil
 	db.extDBLock.Unlock()
@@ -140,7 +140,7 @@ func (db *indexDBReadOnly) hasExtDB() bool {
 // SetExtDB sets external db to search.
 //
 // It decrements refCount for the previous extDB.
-func (db *indexDBReadOnly) SetExtDB(extDB *indexDBReadOnly) {
+func (db *readOnlyIndexDB) SetExtDB(extDB *readOnlyIndexDB) {
 	db.extDBLock.Lock()
 	prevExtDB := db.extDB
 	db.extDB = extDB
@@ -152,15 +152,15 @@ func (db *indexDBReadOnly) SetExtDB(extDB *indexDBReadOnly) {
 }
 
 // MustClose closes db.
-func (db *indexDBReadOnly) MustClose() {
+func (db *readOnlyIndexDB) MustClose() {
 	db.decRef()
 }
 
-func (db *indexDBReadOnly) incRef() {
+func (db *readOnlyIndexDB) incRef() {
 	db.refCount.Add(1)
 }
 
-func (db *indexDBReadOnly) decRef() {
+func (db *readOnlyIndexDB) decRef() {
 	n := db.refCount.Add(-1)
 	if n < 0 {
 		logger.Panicf("BUG: %q negative refCount: %d", db.name, n)
@@ -185,7 +185,7 @@ func (db *indexDBReadOnly) decRef() {
 	}
 }
 
-func (db *indexDBReadOnly) getMetricIDsFromTagFiltersCache(qt *querytracer.Tracer, key []byte) ([]uint64, bool) {
+func (db *readOnlyIndexDB) getMetricIDsFromTagFiltersCache(qt *querytracer.Tracer, key []byte) ([]uint64, bool) {
 	qt = qt.NewChild("search for metricIDs in tag filters cache")
 	defer qt.Done()
 	buf := tagBufPool.Get()
@@ -201,7 +201,7 @@ func (db *indexDBReadOnly) getMetricIDsFromTagFiltersCache(qt *querytracer.Trace
 	return metricIDs, true
 }
 
-func (db *indexDBReadOnly) putMetricIDsToTagFiltersCache(qt *querytracer.Tracer, metricIDs []uint64, key []byte) {
+func (db *readOnlyIndexDB) putMetricIDsToTagFiltersCache(qt *querytracer.Tracer, metricIDs []uint64, key []byte) {
 	qt = qt.NewChild("put %d metricIDs in cache", len(metricIDs))
 	defer qt.Done()
 	buf := tagBufPool.Get()
@@ -212,7 +212,7 @@ func (db *indexDBReadOnly) putMetricIDsToTagFiltersCache(qt *querytracer.Tracer,
 	tagBufPool.Put(buf)
 }
 
-func (db *indexDBReadOnly) getFromMetricIDCache(dst *TSID, metricID uint64) error {
+func (db *readOnlyIndexDB) getFromMetricIDCache(dst *TSID, metricID uint64) error {
 	// There is no need in prefixing the key with (accountID, projectID),
 	// since metricID is globally unique across all (accountID, projectID) values.
 	// See getUniqueUint64.
@@ -232,13 +232,13 @@ func (db *indexDBReadOnly) getFromMetricIDCache(dst *TSID, metricID uint64) erro
 	return nil
 }
 
-func (db *indexDBReadOnly) putToMetricIDCache(metricID uint64, tsid *TSID) {
+func (db *readOnlyIndexDB) putToMetricIDCache(metricID uint64, tsid *TSID) {
 	buf := (*[unsafe.Sizeof(*tsid)]byte)(unsafe.Pointer(tsid))
 	key := (*[unsafe.Sizeof(metricID)]byte)(unsafe.Pointer(&metricID))
 	db.s.metricIDCache.Set(key[:], buf[:])
 }
 
-func (db *indexDBReadOnly) getMetricNameFromCache(dst []byte, metricID uint64) []byte {
+func (db *readOnlyIndexDB) getMetricNameFromCache(dst []byte, metricID uint64) []byte {
 	// There is no need in prefixing the key with (accountID, projectID),
 	// since metricID is globally unique across all (accountID, projectID) values.
 	// See getUniqueUint64.
@@ -249,7 +249,7 @@ func (db *indexDBReadOnly) getMetricNameFromCache(dst []byte, metricID uint64) [
 	return db.s.metricNameCache.Get(dst, key[:])
 }
 
-func (db *indexDBReadOnly) putMetricNameToCache(metricID uint64, metricName []byte) {
+func (db *readOnlyIndexDB) putMetricNameToCache(metricID uint64, metricName []byte) {
 	key := (*[unsafe.Sizeof(metricID)]byte)(unsafe.Pointer(&metricID))
 	db.s.metricNameCache.Set(key[:], metricName)
 }
@@ -267,7 +267,7 @@ func (is *indexSearchReadOnly) getTSIDByMetricName(dst *generationTSID, metricNa
 	// Slow path - search for the TSID in the previous indexdb
 	ok := false
 	deadline := is.deadline
-	is.db.doExtDB(func(extDB *indexDBReadOnly) {
+	is.db.doExtDB(func(extDB *readOnlyIndexDB) {
 		is := extDB.getIndexSearch(0, 0, deadline)
 		ok = is.getTSIDByMetricNameNoExtDB(&dst.TSID, metricName, date)
 		extDB.putIndexSearch(is)
@@ -279,8 +279,8 @@ func (is *indexSearchReadOnly) getTSIDByMetricName(dst *generationTSID, metricNa
 }
 
 type indexSearchReadOnly struct {
-	db *indexDBReadOnly
-	ts mergeset.TableSearch
+	db *readOnlyIndexDB
+	ts mergeset.ReadOnlyTableSearch
 	kb bytesutil.ByteBuffer
 	mp tagToMetricIDsRowParser
 
@@ -292,11 +292,11 @@ type indexSearchReadOnly struct {
 }
 
 // getIndexSearch returns an indexSearchReadOnly with default configuration
-func (db *indexDBReadOnly) getIndexSearch(accountID, projectID uint32, deadline uint64) *indexSearchReadOnly {
+func (db *readOnlyIndexDB) getIndexSearch(accountID, projectID uint32, deadline uint64) *indexSearchReadOnly {
 	return db.getIndexSearchInternal(accountID, projectID, deadline, false)
 }
 
-func (db *indexDBReadOnly) getIndexSearchInternal(accountID, projectID uint32, deadline uint64, sparse bool) *indexSearchReadOnly {
+func (db *readOnlyIndexDB) getIndexSearchInternal(accountID, projectID uint32, deadline uint64, sparse bool) *indexSearchReadOnly {
 	v := db.indexSearchReadOnlyPool.Get()
 	if v == nil {
 		v = &indexSearchReadOnly{
@@ -311,8 +311,7 @@ func (db *indexDBReadOnly) getIndexSearchInternal(accountID, projectID uint32, d
 	return is
 }
 
-func (db *indexDBReadOnly) putIndexSearch(is *indexSearchReadOnly) {
-	is.ts.MustClose()
+func (db *readOnlyIndexDB) putIndexSearch(is *indexSearchReadOnly) {
 	is.kb.Reset()
 	is.mp.Reset()
 	is.accountID = 0
@@ -322,48 +321,9 @@ func (db *indexDBReadOnly) putIndexSearch(is *indexSearchReadOnly) {
 	db.indexSearchReadOnlyPool.Put(is)
 }
 
-func (is *indexSearchReadOnly) createGlobalIndexes(tsid *TSID, mn *MetricName) {
-	ii := getIndexItems()
-	defer putIndexItems(ii)
-
-	if is.db.s.disablePerDayIndex {
-		// Create metricName -> TSID entry.
-		// This index is used for searching a TSID by metric name during data
-		// ingestion or metric name registration when -disablePerDayIndex flag
-		// is set.
-		//
-		// Do not use marshalCommonPrefix() here, since mn already contains (AccountID, ProjectID)
-		ii.B = append(ii.B, nsPrefixMetricNameToTSID)
-		ii.B = mn.Marshal(ii.B)
-		ii.B = append(ii.B, kvSeparatorChar)
-		ii.B = tsid.Marshal(ii.B)
-		ii.Next()
-	}
-
-	// Create metricID -> metricName entry.
-	ii.B = marshalCommonPrefix(ii.B, nsPrefixMetricIDToMetricName, mn.AccountID, mn.ProjectID)
-	ii.B = encoding.MarshalUint64(ii.B, tsid.MetricID)
-	ii.B = mn.Marshal(ii.B)
-	ii.Next()
-
-	// Create metricID -> TSID entry.
-	ii.B = marshalCommonPrefix(ii.B, nsPrefixMetricIDToTSID, mn.AccountID, mn.ProjectID)
-	ii.B = encoding.MarshalUint64(ii.B, tsid.MetricID)
-	ii.B = tsid.Marshal(ii.B)
-	ii.Next()
-
-	// Create tag -> metricID entries for every tag in mn.
-	kb := kbPool.Get()
-	kb.B = marshalCommonPrefix(kb.B[:0], nsPrefixTagToMetricIDs, mn.AccountID, mn.ProjectID)
-	ii.registerTagIndexes(kb.B, mn, tsid.MetricID)
-	kbPool.Put(kb)
-
-	is.db.tb.AddItems(ii.Items)
-}
-
 // SearchLabelNames returns all the label names, which match the given tfss on
 // the given tr.
-func (db *indexDBReadOnly) SearchLabelNames(qt *querytracer.Tracer, accountID, projectID uint32, tfss []*TagFilters, tr TimeRange,
+func (db *readOnlyIndexDB) SearchLabelNames(qt *querytracer.Tracer, accountID, projectID uint32, tfss []*TagFilters, tr TimeRange,
 	maxLabelNames, maxMetrics int, deadline uint64,
 ) ([]string, error) {
 	qt = qt.NewChild("search for label names: filters=%s, timeRange=%s, maxLabelNames=%d, maxMetrics=%d", tfss, &tr, maxLabelNames, maxMetrics)
@@ -379,7 +339,7 @@ func (db *indexDBReadOnly) SearchLabelNames(qt *querytracer.Tracer, accountID, p
 		return nil, err
 	}
 
-	db.doExtDB(func(extDB *indexDBReadOnly) {
+	db.doExtDB(func(extDB *readOnlyIndexDB) {
 		qtChild := qt.NewChild("search for label names in the previous indexdb")
 		lnsLen := len(lns)
 		is := extDB.getIndexSearch(accountID, projectID, deadline)
@@ -583,7 +543,7 @@ func (is *indexSearchReadOnly) getLabelNamesForMetricIDs(qt *querytracer.Tracer,
 }
 
 // SearchTenants returns all tenants on the given tr.
-func (db *indexDBReadOnly) SearchTenants(qt *querytracer.Tracer, tr TimeRange, deadline uint64) ([]string, error) {
+func (db *readOnlyIndexDB) SearchTenants(qt *querytracer.Tracer, tr TimeRange, deadline uint64) ([]string, error) {
 	qt = qt.NewChild("search for tenants on timeRange=%s", &tr)
 	defer qt.Done()
 	tenants := make(map[string]struct{})
@@ -595,7 +555,7 @@ func (db *indexDBReadOnly) SearchTenants(qt *querytracer.Tracer, tr TimeRange, d
 	if err != nil {
 		return nil, err
 	}
-	db.doExtDB(func(extDB *indexDBReadOnly) {
+	db.doExtDB(func(extDB *readOnlyIndexDB) {
 		qtChild := qt.NewChild("search for tenants in the previous indexdb")
 		tenantsLen := len(tenants)
 		is := extDB.getIndexSearch(0, 0, deadline)
@@ -711,7 +671,7 @@ func (is *indexSearchReadOnly) searchTenantsOnDate(tenants map[string]struct{}, 
 }
 
 // SearchLabelValues returns label values for the given labelName, tfss and tr.
-func (db *indexDBReadOnly) SearchLabelValues(qt *querytracer.Tracer, accountID, projectID uint32, labelName string, tfss []*TagFilters, tr TimeRange,
+func (db *readOnlyIndexDB) SearchLabelValues(qt *querytracer.Tracer, accountID, projectID uint32, labelName string, tfss []*TagFilters, tr TimeRange,
 	maxLabelValues, maxMetrics int, deadline uint64,
 ) ([]string, error) {
 	qt = qt.NewChild("search for label values: labelName=%q, filters=%s, timeRange=%s, maxLabelNames=%d, maxMetrics=%d", labelName, tfss, &tr, maxLabelValues, maxMetrics)
@@ -726,7 +686,7 @@ func (db *indexDBReadOnly) SearchLabelValues(qt *querytracer.Tracer, accountID, 
 	if err != nil {
 		return nil, err
 	}
-	db.doExtDB(func(extDB *indexDBReadOnly) {
+	db.doExtDB(func(extDB *readOnlyIndexDB) {
 		qtChild := qt.NewChild("search for label values in the previous indexdb")
 		lvsLen := len(lvs)
 		is := extDB.getIndexSearch(accountID, projectID, deadline)
@@ -923,7 +883,7 @@ func (is *indexSearchReadOnly) getLabelValuesForMetricIDs(qt *querytracer.Tracer
 // This allows implementing https://graphite-api.readthedocs.io/en/latest/api.html#metrics-find or similar APIs.
 //
 // If it returns maxTagValueSuffixes suffixes, then it is likely more than maxTagValueSuffixes suffixes is found.
-func (db *indexDBReadOnly) SearchTagValueSuffixes(qt *querytracer.Tracer, accountID, projectID uint32, tr TimeRange, tagKey, tagValuePrefix string,
+func (db *readOnlyIndexDB) SearchTagValueSuffixes(qt *querytracer.Tracer, accountID, projectID uint32, tr TimeRange, tagKey, tagValuePrefix string,
 	delimiter byte, maxTagValueSuffixes int, deadline uint64,
 ) ([]string, error) {
 	qt = qt.NewChild("search tag value suffixes for accountID=%d, projectID=%d, timeRange=%s, tagKey=%q, tagValuePrefix=%q, delimiter=%c, maxTagValueSuffixes=%d",
@@ -940,7 +900,7 @@ func (db *indexDBReadOnly) SearchTagValueSuffixes(qt *querytracer.Tracer, accoun
 		return nil, err
 	}
 	if len(tvss) < maxTagValueSuffixes {
-		db.doExtDB(func(extDB *indexDBReadOnly) {
+		db.doExtDB(func(extDB *readOnlyIndexDB) {
 			is := extDB.getIndexSearch(accountID, projectID, deadline)
 			qtChild := qt.NewChild("search tag value suffixes in the previous indexdb")
 			err = is.searchTagValueSuffixesForTimeRange(tvss, tr, tagKey, tagValuePrefix, delimiter, maxTagValueSuffixes)
@@ -1084,7 +1044,7 @@ func (is *indexSearchReadOnly) searchTagValueSuffixesForPrefix(tvss map[string]s
 //
 // It includes the deleted series too and may count the same series
 // up to two times - in db and extDB.
-func (db *indexDBReadOnly) GetSeriesCount(accountID, projectID uint32, deadline uint64) (uint64, error) {
+func (db *readOnlyIndexDB) GetSeriesCount(accountID, projectID uint32, deadline uint64) (uint64, error) {
 	is := db.getIndexSearch(accountID, projectID, deadline)
 	n, err := is.getSeriesCount()
 	db.putIndexSearch(is)
@@ -1093,7 +1053,7 @@ func (db *indexDBReadOnly) GetSeriesCount(accountID, projectID uint32, deadline 
 	}
 
 	var nExt uint64
-	db.doExtDB(func(extDB *indexDBReadOnly) {
+	db.doExtDB(func(extDB *readOnlyIndexDB) {
 		is := extDB.getIndexSearch(accountID, projectID, deadline)
 		nExt, err = is.getSeriesCount()
 		extDB.putIndexSearch(is)
@@ -1146,7 +1106,7 @@ func (is *indexSearchReadOnly) getSeriesCount() (uint64, error) {
 }
 
 // GetTSDBStatus returns topN entries for tsdb status for the given tfss, date and focusLabel.
-func (db *indexDBReadOnly) GetTSDBStatus(qt *querytracer.Tracer, accountID, projectID uint32, tfss []*TagFilters, date uint64, focusLabel string, topN, maxMetrics int, deadline uint64) (*TSDBStatus, error) {
+func (db *readOnlyIndexDB) GetTSDBStatus(qt *querytracer.Tracer, accountID, projectID uint32, tfss []*TagFilters, date uint64, focusLabel string, topN, maxMetrics int, deadline uint64) (*TSDBStatus, error) {
 	qtChild := qt.NewChild("collect tsdb stats in the current indexdb")
 
 	is := db.getIndexSearch(accountID, projectID, deadline)
@@ -1159,7 +1119,7 @@ func (db *indexDBReadOnly) GetTSDBStatus(qt *querytracer.Tracer, accountID, proj
 	if status.hasEntries() {
 		return status, nil
 	}
-	db.doExtDB(func(extDB *indexDBReadOnly) {
+	db.doExtDB(func(extDB *readOnlyIndexDB) {
 		qtChild := qt.NewChild("collect tsdb stats in the previous indexdb")
 		is := extDB.getIndexSearch(accountID, projectID, deadline)
 		status, err = is.getTSDBStatus(qtChild, tfss, date, focusLabel, topN, maxMetrics)
@@ -1306,7 +1266,7 @@ func (is *indexSearchReadOnly) getTSDBStatus(qt *querytracer.Tracer, tfss []*Tag
 
 // searchMetricName appends metric name for the given metricID to dst
 // and returns the result.
-func (db *indexDBReadOnly) searchMetricName(dst []byte, metricID uint64, accountID, projectID uint32, noCache bool) ([]byte, bool) {
+func (db *readOnlyIndexDB) searchMetricName(dst []byte, metricID uint64, accountID, projectID uint32, noCache bool) ([]byte, bool) {
 	if !noCache {
 		metricName := db.getMetricNameFromCache(dst, metricID)
 		if len(metricName) > len(dst) {
@@ -1328,7 +1288,7 @@ func (db *indexDBReadOnly) searchMetricName(dst []byte, metricID uint64, account
 	}
 
 	// Try searching in the external indexDBReadOnly.
-	db.doExtDB(func(extDB *indexDBReadOnly) {
+	db.doExtDB(func(extDB *readOnlyIndexDB) {
 		is := extDB.getIndexSearchInternal(accountID, projectID, noDeadline, noCache)
 		dst, ok = is.searchMetricName(dst, metricID)
 		extDB.putIndexSearch(is)
@@ -1349,83 +1309,12 @@ func (db *indexDBReadOnly) searchMetricName(dst []byte, metricID uint64, account
 		// Mark the metricID as deleted, so it is created again when new sample
 		// for the given time series is ingested next time.
 		db.missingMetricNamesForMetricID.Add(1)
-		db.deleteMetricIDs([]uint64{metricID})
 	}
 
 	return dst, false
 }
 
-// DeleteTSIDs marks as deleted all the TSIDs matching the given tfss and
-// updates or resets all caches where TSIDs and the corresponding MetricIDs may
-// be stored.
-//
-// If the number of the series exceeds maxMetrics, no series will be deleted and
-// an error will be returned. Otherwise, the function returns the number of
-// series deleted.
-func (db *indexDBReadOnly) DeleteTSIDs(qt *querytracer.Tracer, tfss []*TagFilters, maxMetrics int) (int, error) {
-	qt = qt.NewChild("deleting series for %s", tfss)
-	defer qt.Done()
-	if len(tfss) == 0 {
-		return 0, nil
-	}
-
-	// Obtain metricIDs to delete.
-	is := db.getIndexSearch(tfss[0].accountID, tfss[0].projectID, noDeadline)
-	metricIDs, err := is.searchMetricIDs(qt, tfss, globalIndexTimeRange, maxMetrics)
-	db.putIndexSearch(is)
-	if err != nil {
-		return 0, err
-	}
-	db.deleteMetricIDs(metricIDs)
-
-	// Delete TSIDs in the extDB.
-	deletedCount := len(metricIDs)
-	db.doExtDB(func(extDB *indexDBReadOnly) {
-		var n int
-		qtChild := qt.NewChild("deleting series from the previous indexdb")
-		n, err = extDB.DeleteTSIDs(qtChild, tfss, maxMetrics)
-		qtChild.Donef("deleted %d series", n)
-		deletedCount += n
-	})
-	if err != nil {
-		return deletedCount, fmt.Errorf("cannot delete tsids in extDB: %w", err)
-	}
-	return deletedCount, nil
-}
-
-func (db *indexDBReadOnly) deleteMetricIDs(metricIDs []uint64) {
-	if len(metricIDs) == 0 {
-		// Nothing to delete
-		return
-	}
-
-	// atomically add deleted metricIDs to an inmemory map.
-	dmis := &uint64set.Set{}
-	dmis.AddMulti(metricIDs)
-	db.s.updateDeletedMetricIDs(dmis)
-
-	// Reset TagFilters -> TSIDS cache, since it may contain deleted TSIDs.
-	invalidateTagFiltersCache()
-
-	// Reset MetricName -> TSID cache, since it may contain deleted TSIDs.
-	db.s.resetAndSaveTSIDCache()
-
-	// Store the metricIDs as deleted.
-	// Make this after updating the deletedMetricIDs and resetting caches
-	// in order to exclude the possibility of the inconsistent state when the deleted metricIDs
-	// remain available in the tsidCache after unclean shutdown.
-	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/1347
-	items := getIndexItems()
-	for _, metricID := range metricIDs {
-		items.B = append(items.B, nsPrefixDeletedMetricID)
-		items.B = encoding.MarshalUint64(items.B, metricID)
-		items.Next()
-	}
-	db.tb.AddItems(items.Items)
-	putIndexItems(items)
-}
-
-func (db *indexDBReadOnly) loadDeletedMetricIDs() (*uint64set.Set, error) {
+func (db *readOnlyIndexDB) loadDeletedMetricIDs() (*uint64set.Set, error) {
 	is := db.getIndexSearch(0, 0, noDeadline)
 	dmis, err := is.loadDeletedMetricIDs()
 	db.putIndexSearch(is)
@@ -1462,7 +1351,7 @@ func (is *indexSearchReadOnly) loadDeletedMetricIDs() (*uint64set.Set, error) {
 // searchMetricIDs returns metricIDs for the given tfss and tr.
 //
 // The returned metricIDs are sorted.
-func (db *indexDBReadOnly) searchMetricIDs(qt *querytracer.Tracer, tfss []*TagFilters, tr TimeRange, maxMetrics int, deadline uint64) ([]uint64, error) {
+func (db *readOnlyIndexDB) searchMetricIDs(qt *querytracer.Tracer, tfss []*TagFilters, tr TimeRange, maxMetrics int, deadline uint64) ([]uint64, error) {
 	qt = qt.NewChild("search for matching metricIDs: filters=%s, timeRange=%s", tfss, &tr)
 	defer qt.Done()
 
@@ -1497,7 +1386,7 @@ func (db *indexDBReadOnly) searchMetricIDs(qt *querytracer.Tracer, tfss []*TagFi
 	qtChild.Done()
 
 	var extMetricIDs []uint64
-	db.doExtDB(func(extDB *indexDBReadOnly) {
+	db.doExtDB(func(extDB *readOnlyIndexDB) {
 		qtChild := qt.NewChild("search for metricIDs in the previous indexdb")
 		defer qtChild.Done()
 
@@ -1533,7 +1422,7 @@ func (db *indexDBReadOnly) searchMetricIDs(qt *querytracer.Tracer, tfss []*TagFi
 	return metricIDs, nil
 }
 
-func (db *indexDBReadOnly) getTSIDsFromMetricIDs(qt *querytracer.Tracer, accountID, projectID uint32, metricIDs []uint64, deadline uint64) ([]TSID, error) {
+func (db *readOnlyIndexDB) getTSIDsFromMetricIDs(qt *querytracer.Tracer, accountID, projectID uint32, metricIDs []uint64, deadline uint64) ([]TSID, error) {
 	qt = qt.NewChild("obtain tsids from %d metricIDs", len(metricIDs))
 	defer qt.Done()
 
@@ -1585,7 +1474,7 @@ func (db *indexDBReadOnly) getTSIDsFromMetricIDs(qt *querytracer.Tracer, account
 	var metricIDsToDelete []uint64
 	if len(extMetricIDs) > 0 {
 		// Search for extMetricIDs in the previous indexdb (aka extDB)
-		db.doExtDB(func(extDB *indexDBReadOnly) {
+		db.doExtDB(func(extDB *readOnlyIndexDB) {
 			is := extDB.getIndexSearch(accountID, projectID, deadline)
 			defer extDB.putIndexSearch(is)
 			for loopsPaceLimiter, metricID := range extMetricIDs {
@@ -1621,10 +1510,6 @@ func (db *indexDBReadOnly) getTSIDsFromMetricIDs(qt *querytracer.Tracer, account
 
 	tsids = tsids[:i]
 	qt.Printf("load %d tsids for %d metricIDs from both current and previous indexdb", len(tsids), len(metricIDs))
-
-	if len(metricIDsToDelete) > 0 {
-		db.deleteMetricIDs(metricIDsToDelete)
-	}
 
 	// Sort the found tsids, since they must be passed to TSID search
 	// in the sorted order.
@@ -2390,39 +2275,6 @@ func (is *indexSearchReadOnly) getMetricIDsForDateAndFilters(qt *querytracer.Tra
 	}
 	qt.Printf("found %d metric ids", metricIDs.Len())
 	return metricIDs, nil
-}
-
-func (is *indexSearchReadOnly) createPerDayIndexes(date uint64, tsid *TSID, mn *MetricName) {
-	if is.db.s.disablePerDayIndex {
-		return
-	}
-	ii := getIndexItems()
-	defer putIndexItems(ii)
-
-	// Create date -> metricID entry.
-	ii.B = marshalCommonPrefix(ii.B, nsPrefixDateToMetricID, mn.AccountID, mn.ProjectID)
-	ii.B = encoding.MarshalUint64(ii.B, date)
-	ii.B = encoding.MarshalUint64(ii.B, tsid.MetricID)
-	ii.Next()
-
-	// Create metricName -> TSID entry.
-	//
-	// Do not use marshalCommonPrefix() here, since mn already contains (AccountID, ProjectID)
-	ii.B = append(ii.B, nsPrefixDateMetricNameToTSID)
-	ii.B = encoding.MarshalUint64(ii.B, date)
-	ii.B = mn.Marshal(ii.B)
-	ii.B = append(ii.B, kvSeparatorChar)
-	ii.B = tsid.Marshal(ii.B)
-	ii.Next()
-
-	// Create per-day tag -> metricID entries for every tag in mn.
-	kb := kbPool.Get()
-	kb.B = marshalCommonPrefix(kb.B[:0], nsPrefixDateTagToMetricIDs, mn.AccountID, mn.ProjectID)
-	kb.B = encoding.MarshalUint64(kb.B, date)
-	ii.registerTagIndexes(kb.B, mn, tsid.MetricID)
-	kbPool.Put(kb)
-
-	is.db.tb.AddItems(ii.Items)
 }
 
 func (is *indexSearchReadOnly) hasDateMetricIDNoExtDB(date, metricID uint64, accountID, projectID uint32) bool {
