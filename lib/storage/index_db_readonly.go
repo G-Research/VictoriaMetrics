@@ -134,6 +134,8 @@ func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) *readOnlyIndexD
 		logger.Panicf("FATAL: cannot parse indexdb path %q: %s", indexDBPath, err)
 	}
 
+	s.tb = mustOpenReadOnlyTable(filepath.Join(s.storagePath, dataDirname), s)
+
 	// Do not persist tagFiltersToMetricIDsCache in files, since it is very volatile because of tagFiltersKeyGen.
 	mem := memory.Allowed()
 	tagFiltersCacheSize := getTagFiltersCacheSize()

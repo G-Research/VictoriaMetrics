@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -118,27 +117,6 @@ func (s *ReadOnlyStorage) adjustTimeRange(tr TimeRange) TimeRange {
 	}
 
 	return tr
-}
-
-func getMinTimestampForCompositeIndex(metadataDir string, isEmptyDB bool) int64 {
-	path := filepath.Join(metadataDir, "minTimestampForCompositeIndex")
-	minTimestamp, err := loadMinTimestampForCompositeIndex(path)
-	if err == nil {
-		return minTimestamp
-	}
-	if !os.IsNotExist(err) {
-		logger.Errorf("cannot read minTimestampForCompositeIndex, so trying to re-create it; error: %s", err)
-	}
-	date := time.Now().UnixNano() / 1e6 / msecPerDay
-	if !isEmptyDB {
-		// The current and the next day can already contain non-composite indexes,
-		// so they cannot be queried with composite indexes.
-		date += 2
-	} else {
-		date = 0
-	}
-	minTimestamp = date * msecPerDay
-	return minTimestamp
 }
 
 func (s *ReadOnlyStorage) mustLoadCache(name string, sizeBytes int) *workingsetcache.Cache {
