@@ -16,6 +16,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
@@ -85,15 +86,52 @@ type readOnlyIndexDB struct {
 	indexSearchReadOnlyPool sync.Pool
 }
 
-func openReadOnlyIndexDB(path string, s *ReadOnlyStorage) *readOnlyIndexDB {
+func getCurrentIndexDBPath(indexDBpath string) (string, error) {
+	// Search for the three most recent tables - the prev, curr and next.
+	des := fs.MustReadDir(indexDBpath)
+	var tableNames []string
+	for _, de := range des {
+		if !fs.IsDirOrSymlink(de) {
+			// Skip non-directories.
+			continue
+		}
+		tableName := de.Name()
+		if !indexDBTableNameRegexp.MatchString(tableName) {
+			// Skip invalid directories.
+			continue
+		}
+		tableNames = append(tableNames, tableName)
+	}
+	sort.Slice(tableNames, func(i, j int) bool {
+		return tableNames[i] < tableNames[j]
+	})
+
+	if len(tableNames) < 2 {
+		return "", fmt.Errorf("index db doesn't exist yet")
+	}
+	return filepath.Join(indexDBpath, tableNames[len(tableNames)-2]), nil
+}
+
+func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) *readOnlyIndexDB {
 	if s == nil {
 		logger.Panicf("BUG: Storage must be non-nil")
 	}
 
-	name := filepath.Base(path)
+	var indexDBPath string
+	for range 5 {
+		var err error
+		indexDBPath, err = getCurrentIndexDBPath(path)
+		if err == nil {
+			break
+		}
+		time.Sleep(1 * time.Second)
+		continue
+	}
+
+	name := filepath.Base(indexDBPath)
 	gen, err := strconv.ParseUint(name, 16, 64)
 	if err != nil {
-		logger.Panicf("FATAL: cannot parse indexdb path %q: %s", path, err)
+		logger.Panicf("FATAL: cannot parse indexdb path %q: %s", indexDBPath, err)
 	}
 
 	// Do not persist tagFiltersToMetricIDsCache in files, since it is very volatile because of tagFiltersKeyGen.

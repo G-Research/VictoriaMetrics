@@ -1,4 +1,5 @@
 PKG_PREFIX := github.com/VictoriaMetrics/VictoriaMetrics
+SHELL := /bin/bash
 
 MAKE_CONCURRENCY ?= $(shell getconf _NPROCESSORS_ONLN)
 MAKE_PARALLEL := $(MAKE) -j $(MAKE_CONCURRENCY)
