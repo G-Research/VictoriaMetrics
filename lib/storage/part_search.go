@@ -234,16 +234,20 @@ func skipSmallMetaindexRows(metaindex []metaindexRow, tsid *TSID) []metaindexRow
 	return metaindex[n-1:]
 }
 
-func (ps *partSearch) readIndexBlock(mr *metaindexRow) (*indexBlock, error) {
+func (ps *partSearch) readIndexBlock(mr *metaindexRow) (ib *indexBlock, err error) {
+	defer func() {
+		if perr := recover(); perr != nil {
+			err = fmt.Errorf("recovering the read: %v", perr)
+		}
+	}()
 	ps.compressedIndexBuf = bytesutil.ResizeNoCopyMayOverallocate(ps.compressedIndexBuf, int(mr.IndexBlockSize))
 	ps.p.indexFile.MustReadAt(ps.compressedIndexBuf, int64(mr.IndexBlockOffset))
 
-	var err error
 	ps.indexBuf, err = encoding.DecompressZSTD(ps.indexBuf[:0], ps.compressedIndexBuf)
 	if err != nil {
 		return nil, fmt.Errorf("cannot decompress index block: %w", err)
 	}
-	ib := &indexBlock{}
+	ib = &indexBlock{}
 	ib.bhs, err = unmarshalBlockHeaders(ib.bhs[:0], ps.indexBuf, int(mr.BlockHeadersCount))
 	if err != nil {
 		return nil, fmt.Errorf("cannot unmarshal index block: %w", err)

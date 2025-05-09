@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/slicesutil"
 )
 
@@ -28,7 +27,6 @@ type ReadOnlyTableSearch struct {
 	err error
 
 	nextItemNoop bool
-	needClosing  bool
 }
 
 func (ts *ReadOnlyTableSearch) reset() {
@@ -53,21 +51,15 @@ func (ts *ReadOnlyTableSearch) reset() {
 	ts.err = nil
 
 	ts.nextItemNoop = false
-	ts.needClosing = false
 }
 
 // Init initializes ts for searching in the tb.
 //
 // MustClose must be called when the ts is no longer needed.
 func (ts *ReadOnlyTableSearch) Init(tb *ReadOnlyTable, sparse bool) {
-	if ts.needClosing {
-		logger.Panicf("BUG: missing MustClose call before the next call to Init")
-	}
-
 	ts.reset()
 
 	ts.tb = tb
-	ts.needClosing = true
 
 	ts.pws = ts.tb.getParts(ts.pws[:0])
 
