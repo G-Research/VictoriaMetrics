@@ -138,10 +138,13 @@ func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) *readOnlyIndexD
 	mem := memory.Allowed()
 	tagFiltersCacheSize := getTagFiltersCacheSize()
 
+	tb := mergeset.MustOpenTableReadOnly(indexDBPath, dataFlushInterval, invalidateTagFiltersCache, mergeTagToMetricIDsRows)
+
 	db := &readOnlyIndexDB{
 		generation: gen,
 		name:       name,
 
+		tb:                         tb,
 		minMissingTimestampByKey:   make(map[string]int64),
 		tagFiltersToMetricIDsCache: workingsetcache.New(tagFiltersCacheSize),
 		s:                          s,

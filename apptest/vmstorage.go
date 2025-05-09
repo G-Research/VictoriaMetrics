@@ -97,5 +97,6 @@ func (app *Vmstorage) ForceMerge(t *testing.T) {
 // String returns the string representation of the vmstorage app state.
 func (app *Vmstorage) String() string {
 	return fmt.Sprintf("{app: %s storageDataPath: %q httpListenAddr: %q vminsertAddr: %q vmselectAddr: %q}", []any{
-		app.app, app.storageDataPath, app.httpListenAddr, app.vminsertAddr, app.vmselectAddr}...)
+		app.app, app.storageDataPath, app.httpListenAddr, app.vminsertAddr, app.vmselectAddr,
+	}...)
 }

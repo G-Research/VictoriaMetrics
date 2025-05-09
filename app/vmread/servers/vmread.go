@@ -66,6 +66,7 @@ type vmreadAPI struct {
 }
 
 func (api *vmreadAPI) InitSearch(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) (vmselectapi.BlockIterator, error) {
+	fmt.Println("Init search")
 	tr := sq.GetTimeRange()
 	if err := checkTimeRange(api.s, tr); err != nil {
 		return nil, err

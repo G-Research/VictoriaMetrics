@@ -3,7 +3,6 @@ package mergeset
 import (
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
@@ -49,7 +48,7 @@ type ReadOnlyTable struct {
 // to persistent storage.
 //
 // The table is created if it doesn't exist yet.
-func MustOpenTableReadOnly(path string, flushInterval time.Duration, flushCallback func(), prepareBlock PrepareBlockCallback, isReadOnly *atomic.Bool) *ReadOnlyTable {
+func MustOpenTableReadOnly(path string, flushInterval time.Duration, flushCallback func(), prepareBlock PrepareBlockCallback) *ReadOnlyTable {
 	path = filepath.Clean(path)
 
 	if flushInterval < pendingItemsFlushInterval {
