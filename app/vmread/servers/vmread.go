@@ -187,7 +187,7 @@ func (api *vmreadAPI) GetMetricNamesUsageStats(qt *querytracer.Tracer, tt *stora
 }
 
 func (api *vmreadAPI) ResetMetricNamesUsageStats(qt *querytracer.Tracer, _ uint64) error {
-	// api.s.ResetMetricNamesStats(qt)
+	api.s.ResetMetricNamesStats(qt)
 	return nil
 }
 

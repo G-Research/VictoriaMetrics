@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
@@ -103,7 +104,31 @@ func (s *ReadOnlySearch) Init(qt *querytracer.Tracer, storage *ReadOnlyStorage, 
 	// It is ok to call Init on non-nil err.
 	// Init must be called before returning because it will fail
 	// on Search.MustClose otherwise.
-	s.ts.Init(storage.tb, tsids, dataTR)
+	var initErr error
+	for range 5 {
+		err := func() (err error) {
+			defer func() {
+				if perr := recover(); perr != nil {
+					err = fmt.Errorf("panic at s.ts.init: %v", err)
+				}
+			}()
+			s.ts.Init(storage.tb, tsids, dataTR)
+			return nil
+		}()
+		if err != nil {
+			logger.Errorf("Retrying due to an error in table search init: %v", err)
+			initErr = err
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		initErr = nil
+		break
+	}
+	if initErr != nil {
+		s.err = initErr
+		return 0
+	}
+
 	qt.Printf("search for parts with data for %d series", len(tsids))
 	if err != nil {
 		s.err = err

@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/blockcache"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
@@ -182,14 +183,20 @@ func (ps *partSearch) nextBHS() bool {
 		b := ibCache.GetBlock(indexBlockKey)
 		if b == nil {
 			// Slow path - actually read and unpack the index block.
-			ib, err := ps.readIndexBlock(mr)
-			if err != nil {
-				ps.err = fmt.Errorf("cannot read index block for part %q at offset %d with size %d: %w",
-					&ps.p.ph, mr.IndexBlockOffset, mr.IndexBlockSize, err)
+			for range 5 {
+				ib, err := ps.readIndexBlock(mr)
+				if err != nil {
+					ps.err = fmt.Errorf("cannot read index block for part %q at offset %d with size %d: %w",
+						&ps.p.ph, mr.IndexBlockOffset, mr.IndexBlockSize, err)
+					time.Sleep(1 * time.Second)
+					continue
+				}
+				b = ib
+				ibCache.PutBlock(indexBlockKey, b)
+			}
+			if b == nil {
 				return false
 			}
-			b = ib
-			ibCache.PutBlock(indexBlockKey, b)
 		}
 		ib := b.(*indexBlock)
 		ps.bhs = ib.bhs

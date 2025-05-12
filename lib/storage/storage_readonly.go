@@ -559,3 +559,8 @@ func (s *ReadOnlyStorage) GetMetricNamesStats(_ *querytracer.Tracer, tt *TenantT
 	res.DeduplicateMergeRecords()
 	return res
 }
+
+// ResetMetricNamesStats resets state for metric names usage tracker
+func (s *ReadOnlyStorage) ResetMetricNamesStats(_ *querytracer.Tracer) {
+	s.metricsTracker.Reset(s.tsidCache.Reset)
+}
