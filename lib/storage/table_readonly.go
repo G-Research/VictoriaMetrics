@@ -307,15 +307,19 @@ func mustOpenPartitionsReadOnly(smallPartitionsPath, bigPartitionsPath string, s
 
 			smallPartsPath := filepath.Join(smallPartitionsPath, ptName)
 			bigPartsPath := filepath.Join(bigPartitionsPath, ptName)
-			pt, err := mustOpenPartitionReadOnly(smallPartsPath, bigPartsPath, s)
-			if err != nil {
-				logger.Warnf("failed to open partition read only: %w", err)
-				return
-			}
+			for range 5 {
+				pt, err := mustOpenPartitionReadOnly(smallPartsPath, bigPartsPath, s)
+				if err != nil {
+					logger.Warnf("failed to open partition read only: %w", err)
+					time.Sleep(1 * time.Second)
+					continue
+				}
 
-			ptsLock.Lock()
-			pts = append(pts, pt)
-			ptsLock.Unlock()
+				ptsLock.Lock()
+				pts = append(pts, pt)
+				ptsLock.Unlock()
+				break
+			}
 		}(ptName)
 	}
 	wg.Wait()
