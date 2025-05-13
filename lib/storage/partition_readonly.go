@@ -1,11 +1,10 @@
 package storage
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
@@ -71,36 +70,22 @@ func openParts(partsFile, path string, partNames []string) []*partWrapper {
 	// Open parts
 	var pws []*partWrapper
 	for _, partName := range partNames {
-		partPath := filepath.Join(path, partName)
-		p, err := openFilePart(partPath)
-		if err != nil {
-			logger.Errorf("failed to open file part %q: %w", partPath, err)
+		for range 5 {
+			partPath := filepath.Join(path, partName)
+			p, err := openFilePart(partPath)
+			if err != nil {
+				logger.Errorf("failed to open file part %q: %w", partPath, err)
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			pw := &partWrapper{
+				p: p,
+			}
+			pw.incRef()
+			pws = append(pws, pw)
+			break
 		}
-		pw := &partWrapper{
-			p: p,
-		}
-		pw.incRef()
-		pws = append(pws, pw)
 	}
 
 	return pws
-}
-
-func readPartNames(partsFile, smallPartsPath, bigPartsPath string) ([]string, []string, error) {
-	if fs.IsPathExist(partsFile) {
-		data, err := os.ReadFile(partsFile)
-		if err != nil {
-			return nil, nil, fmt.Errorf("cannot read %q: %s", partsFile, err)
-		}
-		var partNames partNamesJSON
-		if err := json.Unmarshal(data, &partNames); err != nil {
-			return nil, nil, fmt.Errorf("cannot parse %q: %s", partsFile, err)
-		}
-		return partNames.Small, partNames.Big, nil
-	}
-	// The partsFile is missing. This is the upgrade from versions previous to v1.90.0.
-	// Read part names from smallPartsPath and bigPartsPath directories
-	partNamesSmall := mustReadPartNamesFromDir(smallPartsPath)
-	partNamesBig := mustReadPartNamesFromDir(bigPartsPath)
-	return partNamesSmall, partNamesBig, nil
 }
