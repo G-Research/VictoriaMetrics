@@ -32,6 +32,7 @@ func (s *bucket32Sorter) Less(i, j int) bool {
 	a := *s
 	return a[i].hi < a[j].hi
 }
+
 func (s *bucket32Sorter) Swap(i, j int) {
 	a := *s
 	a[i], a[j] = a[j], a[i]
@@ -967,6 +968,7 @@ func (sps *smallPoolSorter) Less(i, j int) bool {
 	a := sps.a
 	return a[i] < a[j]
 }
+
 func (sps *smallPoolSorter) Swap(i, j int) {
 	a := sps.a
 	a[i], a[j] = a[j], a[i]

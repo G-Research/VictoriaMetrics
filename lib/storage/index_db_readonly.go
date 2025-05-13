@@ -297,30 +297,6 @@ func (db *readOnlyIndexDB) putMetricNameToCache(metricID uint64, metricName []by
 	db.s.metricNameCache.Set(key[:], metricName)
 }
 
-// getTSIDByMetricName fills the dst with TSID for the given metricName at the given date.
-//
-// It returns false if the given metricName isn't found in the indexdb.
-func (is *indexSearchReadOnly) getTSIDByMetricName(dst *generationTSID, metricName []byte, date uint64) bool {
-	if is.getTSIDByMetricNameNoExtDB(&dst.TSID, metricName, date) {
-		// Fast path - the TSID is found in the current indexdb.
-		dst.generation = is.db.generation
-		return true
-	}
-
-	// Slow path - search for the TSID in the previous indexdb
-	ok := false
-	deadline := is.deadline
-	is.db.doExtDB(func(extDB *readOnlyIndexDB) {
-		is := extDB.getIndexSearch(0, 0, deadline)
-		ok = is.getTSIDByMetricNameNoExtDB(&dst.TSID, metricName, date)
-		extDB.putIndexSearch(is)
-		if ok {
-			dst.generation = extDB.generation
-		}
-	})
-	return ok
-}
-
 type indexSearchReadOnly struct {
 	db *readOnlyIndexDB
 	ts mergeset.ReadOnlyTableSearch
@@ -470,7 +446,6 @@ func (is *indexSearchReadOnly) searchLabelNamesWithFiltersOnDate(qt *querytracer
 	ts := &is.ts
 	kb := &is.kb
 	mp := &is.mp
-	dmis := is.db.s.getDeletedMetricIDs()
 	loopsPaceLimiter := 0
 	underscoreNameSeen := false
 	nsPrefixExpected := byte(nsPrefixDateTagToMetricIDs)
@@ -503,9 +478,6 @@ func (is *indexSearchReadOnly) searchLabelNamesWithFiltersOnDate(qt *querytracer
 		}
 		if err := mp.Init(item, nsPrefixExpected); err != nil {
 			return err
-		}
-		if mp.GetMatchingSeriesCount(filter, dmis) == 0 {
-			continue
 		}
 		labelName := mp.Tag.Key
 		if len(labelName) == 0 || hasCompositeLabelName {
@@ -551,16 +523,10 @@ func (is *indexSearchReadOnly) getLabelNamesForMetricIDs(qt *querytracer.Tracer,
 		lns["__name__"] = struct{}{}
 	}
 
-	dmis := is.db.s.getDeletedMetricIDs()
-
 	var mn MetricName
 	foundLabelNames := 0
 	var buf []byte
 	for _, metricID := range metricIDs {
-		if dmis.Has(metricID) {
-			// skip deleted IDs from result
-			continue
-		}
 		var ok bool
 		buf, ok = is.searchMetricNameWithCache(buf[:0], metricID)
 		if !ok {
@@ -835,7 +801,6 @@ func (is *indexSearchReadOnly) searchLabelValuesWithFiltersOnDate(qt *querytrace
 	ts := &is.ts
 	kb := &is.kb
 	mp := &is.mp
-	dmis := is.db.s.getDeletedMetricIDs()
 	loopsPaceLimiter := 0
 	nsPrefixExpected := byte(nsPrefixDateTagToMetricIDs)
 	if date == globalIndexDate {
@@ -858,9 +823,6 @@ func (is *indexSearchReadOnly) searchLabelValuesWithFiltersOnDate(qt *querytrace
 		}
 		if err := mp.Init(item, nsPrefixExpected); err != nil {
 			return err
-		}
-		if mp.GetMatchingSeriesCount(filter, dmis) == 0 {
-			continue
 		}
 		labelValue := mp.Tag.Value
 		if string(labelValue) == string(prevLabelValue) {
@@ -888,16 +850,10 @@ func (is *indexSearchReadOnly) getLabelValuesForMetricIDs(qt *querytracer.Tracer
 		labelName = "__name__"
 	}
 
-	dmis := is.db.s.getDeletedMetricIDs()
-
 	var mn MetricName
 	foundLabelValues := 0
 	var buf []byte
 	for _, metricID := range metricIDs {
-		if dmis.Has(metricID) {
-			// skip deleted IDs from result
-			continue
-		}
 		var ok bool
 		buf, ok = is.searchMetricNameWithCache(buf[:0], metricID)
 		if !ok {
@@ -1036,7 +992,6 @@ func (is *indexSearchReadOnly) searchTagValueSuffixesForPrefix(tvss map[string]s
 	kb := &is.kb
 	ts := &is.ts
 	mp := &is.mp
-	dmis := is.db.s.getDeletedMetricIDs()
 	loopsPaceLimiter := 0
 	ts.Seek(prefix)
 	for len(tvss) < maxTagValueSuffixes && ts.NextItem() {
@@ -1052,9 +1007,6 @@ func (is *indexSearchReadOnly) searchTagValueSuffixesForPrefix(tvss map[string]s
 		}
 		if err := mp.Init(item, nsPrefix); err != nil {
 			return err
-		}
-		if mp.GetMatchingSeriesCount(nil, dmis) == 0 {
-			continue
 		}
 		tagValue := mp.Tag.Value
 		suffix := tagValue[tagValuePrefixLen:]
@@ -1188,7 +1140,6 @@ func (is *indexSearchReadOnly) getTSDBStatus(qt *querytracer.Tracer, tfss []*Tag
 	ts := &is.ts
 	kb := &is.kb
 	mp := &is.mp
-	dmis := is.db.s.getDeletedMetricIDs()
 	thSeriesCountByMetricName := newTopHeap(topN)
 	thSeriesCountByLabelName := newTopHeap(topN)
 	thSeriesCountByFocusLabelValue := newTopHeap(topN)
@@ -1222,7 +1173,7 @@ func (is *indexSearchReadOnly) getTSDBStatus(qt *querytracer.Tracer, tfss []*Tag
 		if err := mp.Init(item, nsPrefixExpected); err != nil {
 			return nil, err
 		}
-		matchingSeriesCount := mp.GetMatchingSeriesCount(filter, dmis)
+		matchingSeriesCount := mp.GetMatchingSeriesCount(filter, nil)
 		if matchingSeriesCount == 0 {
 			// Skip rows without matching metricIDs.
 			continue
@@ -1343,15 +1294,6 @@ func (db *readOnlyIndexDB) searchMetricName(dst []byte, metricID uint64, account
 	})
 	if ok {
 		return dst, true
-	}
-
-	if db.s.wasMetricIDMissingBefore(metricID) {
-		// Cannot find the MetricName for the given metricID for the last 60 seconds.
-		// It is likely the indexDBReadOnly contains incomplete set of metricID -> metricName entries
-		// after unclean shutdown or after restoring from a snapshot.
-		// Mark the metricID as deleted, so it is created again when new sample
-		// for the given time series is ingested next time.
-		db.missingMetricNamesForMetricID.Add(1)
 	}
 
 	return dst, false
@@ -1514,7 +1456,6 @@ func (db *readOnlyIndexDB) getTSIDsFromMetricIDs(qt *querytracer.Tracer, account
 	tsidsFound := i
 	qt.Printf("found %d tsids for %d metricIDs in the current indexdb", tsidsFound, len(metricIDs))
 
-	var metricIDsToDelete []uint64
 	if len(extMetricIDs) > 0 {
 		// Search for extMetricIDs in the previous indexdb (aka extDB)
 		db.doExtDB(func(extDB *readOnlyIndexDB) {
@@ -1535,10 +1476,6 @@ func (db *readOnlyIndexDB) getTSIDsFromMetricIDs(qt *querytracer.Tracer, account
 					// due to snapshot or due to un-flushed entries.
 					// Mark the metricID as deleted, so it is created again when new sample
 					// for the given time series is ingested next time.
-					if is.db.s.wasMetricIDMissingBefore(metricID) {
-						is.db.missingTSIDsForMetricID.Add(1)
-						metricIDsToDelete = append(metricIDsToDelete, metricID)
-					}
 					continue
 				}
 				is.db.putToMetricIDCache(metricID, tsid)
@@ -1562,7 +1499,6 @@ func (db *readOnlyIndexDB) getTSIDsFromMetricIDs(qt *querytracer.Tracer, account
 }
 
 func (is *indexSearchReadOnly) getTSIDByMetricNameNoExtDB(dst *TSID, metricName []byte, date uint64) bool {
-	dmis := is.db.s.getDeletedMetricIDs()
 	ts := &is.ts
 	kb := &is.kb
 
@@ -1589,10 +1525,6 @@ func (is *indexSearchReadOnly) getTSIDByMetricNameNoExtDB(dst *TSID, metricName 
 		}
 		if len(tail) > 0 {
 			logger.Panicf("FATAL: unexpected non-empty tail left after unmarshaling TSID: %X", tail)
-		}
-		if dmis.Has(dst.MetricID) {
-			// The dst is deleted. Continue searching.
-			continue
 		}
 		// Found valid dst.
 		return true
@@ -1811,19 +1743,6 @@ func (is *indexSearchReadOnly) searchMetricIDs(qt *querytracer.Tracer, tfss []*T
 
 	sortedMetricIDs := metricIDs.AppendTo(nil)
 	qt.Printf("sort %d matching metric ids", len(sortedMetricIDs))
-
-	// Filter out deleted metricIDs.
-	dmis := is.db.s.getDeletedMetricIDs()
-	if dmis.Len() > 0 {
-		metricIDsFiltered := sortedMetricIDs[:0]
-		for _, metricID := range sortedMetricIDs {
-			if !dmis.Has(metricID) {
-				metricIDsFiltered = append(metricIDsFiltered, metricID)
-			}
-		}
-		qt.Printf("left %d metric ids after removing deleted metric ids", len(metricIDsFiltered))
-		sortedMetricIDs = metricIDsFiltered
-	}
 
 	return sortedMetricIDs, nil
 }
@@ -2318,44 +2237,6 @@ func (is *indexSearchReadOnly) getMetricIDsForDateAndFilters(qt *querytracer.Tra
 	}
 	qt.Printf("found %d metric ids", metricIDs.Len())
 	return metricIDs, nil
-}
-
-func (is *indexSearchReadOnly) hasDateMetricIDNoExtDB(date, metricID uint64, accountID, projectID uint32) bool {
-	if date == globalIndexDate {
-		return is.hasMetricIDNoExtDB(metricID, accountID, projectID)
-	}
-
-	ts := &is.ts
-	kb := &is.kb
-	kb.B = marshalCommonPrefix(kb.B[:0], nsPrefixDateToMetricID, accountID, projectID)
-	kb.B = encoding.MarshalUint64(kb.B, date)
-	kb.B = encoding.MarshalUint64(kb.B, metricID)
-	err := ts.FirstItemWithPrefix(kb.B)
-	if err == nil {
-		if string(ts.Item) != string(kb.B) {
-			logger.Panicf("FATAL: unexpected entry for (date=%s, metricID=%d); got %q; want %q", dateToString(date), metricID, ts.Item, kb.B)
-		}
-		// Fast path - the (date, metricID) entry is found in the current indexdb.
-		return true
-	}
-	if err != io.EOF {
-		logger.Panicf("FATAL: unexpected error when searching for (date=%s, metricID=%d) entry: %s", dateToString(date), metricID, err)
-	}
-	return false
-}
-
-func (is *indexSearchReadOnly) hasMetricIDNoExtDB(metricID uint64, accountID, projectID uint32) bool {
-	ts := &is.ts
-	kb := &is.kb
-	kb.B = marshalCommonPrefix(kb.B[:0], nsPrefixMetricIDToTSID, accountID, projectID)
-	kb.B = encoding.MarshalUint64(kb.B, metricID)
-	if err := ts.FirstItemWithPrefix(kb.B); err != nil {
-		if err == io.EOF {
-			return false
-		}
-		logger.Panicf("FATAL: error when for metricID=%d; searchPrefix %q: %s", metricID, kb.B, err)
-	}
-	return true
 }
 
 func (is *indexSearchReadOnly) getMetricIDsForDateTagFilter(qt *querytracer.Tracer, tf *tagFilter, date uint64, commonPrefix []byte,
