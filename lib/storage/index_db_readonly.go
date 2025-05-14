@@ -51,18 +51,6 @@ type readOnlyIndexDB struct {
 	// The db must be automatically recovered after that.
 	missingMetricNamesForMetricID atomic.Uint64
 
-	// minMissingTimestampByKey holds the minimum timestamps by index search key,
-	// which is missing in the given indexDBReadOnly.
-	// Key must be formed with marshalCommonPrefix function.
-	//
-	// This field is used at containsTimeRange() function only for the previous indexDBReadOnly,
-	// since this indexDBReadOnly is readonly.
-	// This field cannot be used for the current indexDBReadOnly, since it may receive data
-	// with bigger timestamps at any time.
-	minMissingTimestampByKey map[string]int64
-	// protects minMissingTimestampByKey
-	minMissingTimestampByKeyLock sync.RWMutex
-
 	// generation identifies the index generation ID
 	// and is used for syncing items from different indexDBReadOnlys
 	generation uint64
@@ -72,9 +60,6 @@ type readOnlyIndexDB struct {
 
 	extDB     *readOnlyIndexDB
 	extDBLock sync.Mutex
-
-	// Cache for fast TagFilters -> MetricIDs lookup.
-	tagFiltersToMetricIDsCache *workingsetcache.Cache
 
 	// The parent storage.
 	s *ReadOnlyStorage
@@ -138,7 +123,6 @@ func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) *readOnlyIndexD
 
 	// Do not persist tagFiltersToMetricIDsCache in files, since it is very volatile because of tagFiltersKeyGen.
 	mem := memory.Allowed()
-	tagFiltersCacheSize := getTagFiltersCacheSize()
 
 	tb := mergeset.MustOpenTableReadOnly(indexDBPath, dataFlushInterval, invalidateTagFiltersCache, mergeTagToMetricIDsRows)
 
@@ -147,8 +131,6 @@ func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) *readOnlyIndexD
 		name:       name,
 
 		tb:                         tb,
-		minMissingTimestampByKey:   make(map[string]int64),
-		tagFiltersToMetricIDsCache: workingsetcache.New(tagFiltersCacheSize),
 		s:                          s,
 		loopsPerDateTagFilterCache: workingsetcache.New(mem / 128),
 	}
@@ -216,43 +198,14 @@ func (db *readOnlyIndexDB) decRef() {
 	db.SetExtDB(nil)
 
 	// Free space occupied by caches owned by db.
-	db.tagFiltersToMetricIDsCache.Stop()
 	db.loopsPerDateTagFilterCache.Stop()
 
-	db.tagFiltersToMetricIDsCache = nil
 	db.s = nil
 	db.loopsPerDateTagFilterCache = nil
 
 	if !db.mustDrop.Load() {
 		return
 	}
-}
-
-func (db *readOnlyIndexDB) getMetricIDsFromTagFiltersCache(qt *querytracer.Tracer, key []byte) ([]uint64, bool) {
-	qt = qt.NewChild("search for metricIDs in tag filters cache")
-	defer qt.Done()
-	buf := tagBufPool.Get()
-	defer tagBufPool.Put(buf)
-	buf.B = db.tagFiltersToMetricIDsCache.GetBig(buf.B[:0], key)
-	if len(buf.B) == 0 {
-		qt.Printf("cache miss")
-		return nil, false
-	}
-	qt.Printf("found metricIDs with size: %d bytes", len(buf.B))
-	metricIDs := mustUnmarshalMetricIDs(nil, buf.B)
-	qt.Printf("unmarshaled %d metricIDs", len(metricIDs))
-	return metricIDs, true
-}
-
-func (db *readOnlyIndexDB) putMetricIDsToTagFiltersCache(qt *querytracer.Tracer, metricIDs []uint64, key []byte) {
-	qt = qt.NewChild("put %d metricIDs in cache", len(metricIDs))
-	defer qt.Done()
-	buf := tagBufPool.Get()
-	buf.B = marshalMetricIDs(buf.B, metricIDs)
-	qt.Printf("marshaled %d metricIDs into %d bytes", len(metricIDs), len(buf.B))
-	db.tagFiltersToMetricIDsCache.SetBig(key, buf.B)
-	qt.Printf("stored %d metricIDs into cache", len(metricIDs))
-	tagBufPool.Put(buf)
 }
 
 func (db *readOnlyIndexDB) getFromMetricIDCache(dst *TSID, metricID uint64) error {
@@ -1349,15 +1302,7 @@ func (db *readOnlyIndexDB) searchMetricIDs(qt *querytracer.Tracer, tfss []*TagFi
 	defer tagFiltersKeyBufPool.Put(tfKeyBuf)
 
 	tfKeyBuf.B = marshalTagFiltersKey(tfKeyBuf.B[:0], tfss, tr, true)
-	metricIDs, ok := db.getMetricIDsFromTagFiltersCache(qtChild, tfKeyBuf.B)
-	if ok {
-		// Fast path - metricIDs found in the cache
-		if len(metricIDs) > maxMetrics {
-			return nil, errTooManyTimeseries(maxMetrics)
-		}
-		qtChild.Done()
-		return metricIDs, nil
-	}
+	var metricIDs []uint64
 
 	// Slow path - search for metricIDs in the db and extDB.
 	accountID := tfss[0].accountID
@@ -1380,17 +1325,9 @@ func (db *readOnlyIndexDB) searchMetricIDs(qt *querytracer.Tracer, tfss []*TagFi
 
 		// Data in extDB cannot be changed, so use unversioned keys for tag cache.
 		tfKeyExtBuf.B = marshalTagFiltersKey(tfKeyExtBuf.B[:0], tfss, tr, false)
-		metricIDs, ok := extDB.getMetricIDsFromTagFiltersCache(qtChild, tfKeyExtBuf.B)
-		if ok {
-			extMetricIDs = metricIDs
-			return
-		}
 		is := extDB.getIndexSearch(accountID, projectID, deadline)
 		extMetricIDs, err = is.searchMetricIDs(qtChild, tfss, tr, maxMetrics)
 		extDB.putIndexSearch(is)
-		if err == nil {
-			extDB.putMetricIDsToTagFiltersCache(qtChild, extMetricIDs, tfKeyExtBuf.B)
-		}
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error when searching for metricIDs in the previous indexdb: %w", err)
@@ -1400,9 +1337,6 @@ func (db *readOnlyIndexDB) searchMetricIDs(qt *querytracer.Tracer, tfss []*TagFi
 	metricIDs = mergeSortedMetricIDs(localMetricIDs, extMetricIDs)
 	qt.Printf("merge %d metricIDs from the current indexdb with %d metricIDs from the previous indexdb; result: %d metricIDs",
 		len(localMetricIDs), len(extMetricIDs), len(metricIDs))
-
-	// Store metricIDs in the cache.
-	db.putMetricIDsToTagFiltersCache(qt, metricIDs, tfKeyBuf.B)
 
 	return metricIDs, nil
 }
@@ -1498,44 +1432,6 @@ func (db *readOnlyIndexDB) getTSIDsFromMetricIDs(qt *querytracer.Tracer, account
 	return tsids, nil
 }
 
-func (is *indexSearchReadOnly) getTSIDByMetricNameNoExtDB(dst *TSID, metricName []byte, date uint64) bool {
-	ts := &is.ts
-	kb := &is.kb
-
-	// Do not use marshalCommonPrefix() here, since mn already contains (AccountID, ProjectID)
-	if is.db.s.disablePerDayIndex {
-		kb.B = append(kb.B[:0], nsPrefixMetricNameToTSID)
-	} else {
-		kb.B = append(kb.B[:0], nsPrefixDateMetricNameToTSID)
-		kb.B = encoding.MarshalUint64(kb.B, date)
-	}
-
-	kb.B = append(kb.B, metricName...)
-	kb.B = append(kb.B, kvSeparatorChar)
-	ts.Seek(kb.B)
-	for ts.NextItem() {
-		if !bytes.HasPrefix(ts.Item, kb.B) {
-			// Nothing found.
-			return false
-		}
-		v := ts.Item[len(kb.B):]
-		tail, err := dst.Unmarshal(v)
-		if err != nil {
-			logger.Panicf("FATAL: cannot unmarshal TSID: %s", err)
-		}
-		if len(tail) > 0 {
-			logger.Panicf("FATAL: unexpected non-empty tail left after unmarshaling TSID: %X", tail)
-		}
-		// Found valid dst.
-		return true
-	}
-	if err := ts.Error(); err != nil {
-		logger.Panicf("FATAL: error when searching TSID by metricName; searchPrefix %q: %s", kb.B, err)
-	}
-	// Nothing found
-	return false
-}
-
 func (is *indexSearchReadOnly) searchMetricNameWithCache(dst []byte, metricID uint64) ([]byte, bool) {
 	metricName := is.db.getMetricNameFromCache(dst, metricID)
 	if len(metricName) > len(dst) {
@@ -1587,24 +1483,8 @@ func (is *indexSearchReadOnly) containsTimeRange(tr TimeRange) bool {
 	// which uses tenant labels for the index search
 	kb := &is.kb
 	kb.B = is.marshalCommonPrefix(kb.B[:0], nsPrefixDateToMetricID)
-	key := kb.B
 
-	db.minMissingTimestampByKeyLock.RLock()
-	minMissingTimestamp, ok := db.minMissingTimestampByKey[string(key)]
-	db.minMissingTimestampByKeyLock.RUnlock()
-
-	if ok && tr.MinTimestamp >= minMissingTimestamp {
-		return false
-	}
-	if is.containsTimeRangeSlowForPrefixBuf(kb, tr) {
-		return true
-	}
-
-	db.minMissingTimestampByKeyLock.Lock()
-	db.minMissingTimestampByKey[string(key)] = tr.MinTimestamp
-	db.minMissingTimestampByKeyLock.Unlock()
-
-	return false
+	return is.containsTimeRangeSlowForPrefixBuf(kb, tr)
 }
 
 func (is *indexSearchReadOnly) containsTimeRangeSlowForPrefixBuf(prefixBuf *bytesutil.ByteBuffer, tr TimeRange) bool {

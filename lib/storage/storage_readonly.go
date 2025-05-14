@@ -205,6 +205,7 @@ func (s *ReadOnlyStorage) SearchMetricNames(qt *querytracer.Tracer, tfss []*TagF
 
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
 	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	defer idb.MustClose()
 
 	metricIDs, err := idb.searchMetricIDs(qt, tfss, tr, maxMetrics, deadline)
 	if err != nil {
@@ -259,6 +260,7 @@ func (s *ReadOnlyStorage) SearchMetricNames(qt *querytracer.Tracer, tfss []*TagF
 func (s *ReadOnlyStorage) SearchLabelValues(qt *querytracer.Tracer, accountID, projectID uint32, labelName string, tfss []*TagFilters, tr TimeRange, maxLabelValues, maxMetrics int, deadline uint64) ([]string, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
 	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	defer idb.MustClose()
 	tr = s.adjustTimeRange(tr)
 
 	key := labelName
@@ -318,6 +320,7 @@ func (s *ReadOnlyStorage) SearchTagValueSuffixes(qt *querytracer.Tracer, account
 ) ([]string, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
 	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	defer idb.MustClose()
 	tr = s.adjustTimeRange(tr)
 	return idb.SearchTagValueSuffixes(qt, accountID, projectID, tr, tagKey, tagValuePrefix, delimiter, maxTagValueSuffixes, deadline)
 }
@@ -334,6 +337,7 @@ func (s *ReadOnlyStorage) SearchTagValueSuffixes(qt *querytracer.Tracer, account
 func (s *ReadOnlyStorage) SearchLabelNames(qt *querytracer.Tracer, accountID, projectID uint32, tfss []*TagFilters, tr TimeRange, maxLabelNames, maxMetrics int, deadline uint64) ([]string, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
 	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	defer idb.MustClose()
 	tr = s.adjustTimeRange(tr)
 	return idb.SearchLabelNames(qt, accountID, projectID, tfss, tr, maxLabelNames, maxMetrics, deadline)
 }
@@ -345,6 +349,7 @@ func (s *ReadOnlyStorage) SearchLabelNames(qt *querytracer.Tracer, accountID, pr
 func (s *ReadOnlyStorage) GetSeriesCount(accountID, projectID uint32, deadline uint64) (uint64, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
 	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	defer idb.MustClose()
 	return idb.GetSeriesCount(accountID, projectID, deadline)
 }
 
@@ -352,6 +357,7 @@ func (s *ReadOnlyStorage) GetSeriesCount(accountID, projectID uint32, deadline u
 func (s *ReadOnlyStorage) SearchTenants(qt *querytracer.Tracer, tr TimeRange, deadline uint64) ([]string, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
 	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	defer idb.MustClose()
 	return idb.SearchTenants(qt, tr, deadline)
 }
 
@@ -365,6 +371,7 @@ func (s *ReadOnlyStorage) SearchTenants(qt *querytracer.Tracer, tr TimeRange, de
 func (s *ReadOnlyStorage) GetTSDBStatus(qt *querytracer.Tracer, accountID, projectID uint32, tfss []*TagFilters, date uint64, focusLabel string, topN, maxMetrics int, deadline uint64) (*TSDBStatus, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
 	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	defer idb.MustClose()
 	if s.disablePerDayIndex {
 		date = globalIndexDate
 	}
@@ -392,6 +399,7 @@ func (s *ReadOnlyStorage) RegisterMetricNames(qt *querytracer.Tracer, mrs []Metr
 func (s *ReadOnlyStorage) SearchGraphitePaths(qt *querytracer.Tracer, accountID, projectID uint32, tr TimeRange, query []byte, maxPaths int, deadline uint64) ([]string, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
 	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	defer idb.MustClose()
 	tr = s.adjustTimeRange(tr)
 	query = replaceAlternateRegexpsWithGraphiteWildcards(query)
 	return s.searchGraphitePaths(qt, idb, accountID, projectID, tr, nil, query, maxPaths, deadline)
