@@ -70,7 +70,7 @@ func openParts(partsFile, path string, partNames []string) []*partWrapper {
 	// Open parts
 	var pws []*partWrapper
 	for _, partName := range partNames {
-		for range 5 {
+		for i := range 5 {
 			partPath := filepath.Join(path, partName)
 			p, err := openFilePart(partPath)
 			if err != nil {
@@ -83,6 +83,7 @@ func openParts(partsFile, path string, partNames []string) []*partWrapper {
 			}
 			pw.incRef()
 			pws = append(pws, pw)
+			logger.Infof("succeeded on %d retry", i)
 			break
 		}
 	}

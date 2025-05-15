@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
@@ -285,44 +286,55 @@ func (tb *readOnlyTable) PutPartitions(ptws []*partitionWrapper) {
 }
 
 func mustOpenPartitionsReadOnly(smallPartitionsPath, bigPartitionsPath string, s *ReadOnlyStorage) []*partition {
-	// Certain partition directories in either `big` or `small` dir may be missing
-	// after restoring from backup. So populate partition names from both dirs.
-	ptNames := make(map[string]bool)
-	mustPopulatePartitionNames(smallPartitionsPath, ptNames)
-	mustPopulatePartitionNames(bigPartitionsPath, ptNames)
-	var pts []*partition
-	var ptsLock sync.Mutex
+	pts := make([]*partition, 0)
+	for range 5 {
+		pts = pts[:0]
+		// Certain partition directories in either `big` or `small` dir may be missing
+		// after restoring from backup. So populate partition names from both dirs.
+		ptNames := make(map[string]bool)
+		mustPopulatePartitionNames(smallPartitionsPath, ptNames)
+		mustPopulatePartitionNames(bigPartitionsPath, ptNames)
+		var ptsLock sync.Mutex
 
-	// Open partitions in parallel. This should reduce the time needed for opening multiple partitions.
-	var wg sync.WaitGroup
-	concurrencyLimiterCh := make(chan struct{}, cgroup.AvailableCPUs())
-	for ptName := range ptNames {
-		wg.Add(1)
-		concurrencyLimiterCh <- struct{}{}
-		go func(ptName string) {
-			defer func() {
-				<-concurrencyLimiterCh
-				wg.Done()
-			}()
+		// Open partitions in parallel. This should reduce the time needed for opening multiple partitions.
+		var wg sync.WaitGroup
+		concurrencyLimiterCh := make(chan struct{}, cgroup.AvailableCPUs())
+		var retry atomic.Bool
+		for ptName := range ptNames {
+			wg.Add(1)
+			concurrencyLimiterCh <- struct{}{}
+			go func(ptName string) {
+				defer func() {
+					<-concurrencyLimiterCh
+					wg.Done()
+				}()
 
-			smallPartsPath := filepath.Join(smallPartitionsPath, ptName)
-			bigPartsPath := filepath.Join(bigPartitionsPath, ptName)
-			for range 5 {
+				smallPartsPath := filepath.Join(smallPartitionsPath, ptName)
+				bigPartsPath := filepath.Join(bigPartitionsPath, ptName)
 				pt, err := mustOpenPartitionReadOnly(smallPartsPath, bigPartsPath, s)
 				if err != nil {
 					logger.Warnf("failed to open partition read only: %w", err)
-					time.Sleep(1 * time.Second)
-					continue
+					retry.Store(true)
+					return
 				}
 
 				ptsLock.Lock()
 				pts = append(pts, pt)
 				ptsLock.Unlock()
-				break
-			}
-		}(ptName)
+			}(ptName)
+		}
+		wg.Wait()
+
+		if retry.Load() {
+			logger.Warnf("retrying since some partitions are failing to open")
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		return pts
 	}
-	wg.Wait()
+
+	logger.Warnf("exhausted all retries; returning partial results")
 
 	return pts
 }
