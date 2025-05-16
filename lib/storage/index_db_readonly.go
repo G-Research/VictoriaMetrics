@@ -109,7 +109,7 @@ func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) *readOnlyIndexD
 		if err == nil {
 			break
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(100 * time.Millisecond)
 		continue
 	}
 

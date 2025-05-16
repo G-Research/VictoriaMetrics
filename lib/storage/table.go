@@ -565,7 +565,7 @@ func mustPopulatePartitionNames(partitionsPath string, ptNames map[string]bool) 
 	for range 5 {
 		des, err := os.ReadDir(partitionsPath)
 		if err != nil {
-			time.Sleep(1 * time.Second)
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		for _, de := range des {

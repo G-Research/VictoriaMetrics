@@ -118,7 +118,7 @@ func (s *ReadOnlySearch) Init(qt *querytracer.Tracer, storage *ReadOnlyStorage, 
 		if err != nil {
 			logger.Errorf("Retrying due to an error in table search init: %v", err)
 			initErr = err
-			time.Sleep(1 * time.Second)
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		initErr = nil

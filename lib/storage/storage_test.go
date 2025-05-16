@@ -3134,7 +3134,6 @@ func TestStorageAdjustTimeRange(t *testing.T) {
 	tr = TimeRange{10 * msecPerDay, 51*msecPerDay + 1}
 	f(false, tr, globalIndexTimeRange)
 	f(true, tr, globalIndexTimeRange)
-
 }
 
 type testStorageSearchWithoutPerDayIndexOptions struct {

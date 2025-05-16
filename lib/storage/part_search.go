@@ -188,7 +188,7 @@ func (ps *partSearch) nextBHS() bool {
 				if err != nil {
 					ps.err = fmt.Errorf("cannot read index block for part %q at offset %d with size %d: %w",
 						&ps.p.ph, mr.IndexBlockOffset, mr.IndexBlockSize, err)
-					time.Sleep(1 * time.Second)
+					time.Sleep(100 * time.Millisecond)
 					continue
 				}
 				b = ib

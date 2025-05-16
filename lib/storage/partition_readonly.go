@@ -33,9 +33,14 @@ func mustOpenPartitionReadOnly(smallPartsPath, bigPartsPath string) (*partition,
 		return nil, err
 	}
 
-	smallParts := openParts(partsFile, smallPartsPath, partNamesSmall)
-	bigParts := openParts(partsFile, bigPartsPath, partNamesBig)
-
+	smallParts, err := openParts(partsFile, smallPartsPath, partNamesSmall)
+	if err != nil {
+		return nil, err
+	}
+	bigParts, err := openParts(partsFile, bigPartsPath, partNamesBig)
+	if err != nil {
+		return nil, err
+	}
 	if !fs.IsPathExist(partsFile) {
 		// Create parts.json file if it doesn't exist yet.
 		// This should protect from possible carshloops just after the migration from versions below v1.90.0
@@ -50,39 +55,43 @@ func mustOpenPartitionReadOnly(smallPartsPath, bigPartsPath string) (*partition,
 	return pt, nil
 }
 
-func openParts(partsFile, path string, partNames []string) []*partWrapper {
+func openParts(partsFile, path string, partNames []string) ([]*partWrapper, error) {
 	if !fs.IsPathExist(path) {
-		return nil
-	}
-
-	m := make(map[string]struct{}, len(partNames))
-	for _, partName := range partNames {
-		// Make sure the partName exists on disk.
-		// If it is missing, then manual action from the user is needed,
-		// since this is unexpected state, which cannot occur under normal operation,
-		// including unclean shutdown.
-		partPath := filepath.Join(path, partName)
-		if !fs.IsPathExist(partPath) {
-			logger.Warnf("part %q is listed in %q, but is missing on disk; "+
-				"ensure %q contents is not corrupted; remove %q to rebuild its content from the list of existing parts",
-				partPath, partsFile, partsFile, partsFile)
-			continue
-		}
-
-		m[partName] = struct{}{}
+		return nil, nil
 	}
 
 	// Open parts
 	var pws []*partWrapper
-	for _, partName := range partNames {
-		var i int
-		for i = range 5 {
+	var i int
+	m := make(map[string]struct{}, len(partNames))
+outer:
+	for i = range 5 {
+		pws = pws[:0]
+		clear(m)
+		for _, partName := range partNames {
+			// Make sure the partName exists on disk.
+			// If it is missing, then manual action from the user is needed,
+			// since this is unexpected state, which cannot occur under normal operation,
+			// including unclean shutdown.
+			partPath := filepath.Join(path, partName)
+			if !fs.IsPathExist(partPath) {
+				logger.Errorf("part %q is listed in %q, but is missing on disk; "+
+					"ensure %q contents is not corrupted; remove %q to rebuild its content from the list of existing parts",
+					partPath, partsFile, partsFile, partsFile)
+				time.Sleep(100 * time.Millisecond)
+				continue outer
+			}
+
+			m[partName] = struct{}{}
+		}
+
+		for _, partName := range partNames {
 			partPath := filepath.Join(path, partName)
 			p, err := openFilePart(partPath)
 			if err != nil {
 				logger.Errorf("failed to open file part %q: %w", partPath, err)
-				time.Sleep(1 * time.Second)
-				continue
+				time.Sleep(100 * time.Millisecond)
+				continue outer
 			}
 			pw := &partWrapper{
 				p: p,
@@ -91,10 +100,13 @@ func openParts(partsFile, path string, partNames []string) []*partWrapper {
 			pws = append(pws, pw)
 			break
 		}
-		if i > 0 {
-			logger.Infof("succeeded on %d retry", i)
-		}
 	}
 
-	return pws
+	if i == 5 {
+		return nil, fmt.Errorf("failed to open %d parts from %q after 5 attempts", len(partNames), path)
+	} else if i > 0 {
+		logger.Infof("opened %d parts from %q after %d attempts", len(partNames), path, i)
+	}
+
+	return pws, nil
 }
