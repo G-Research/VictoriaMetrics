@@ -5,12 +5,14 @@ on:
     branches:
       - cluster
       - master
+      - '*-gr'
     paths:
       - '**.go'
   pull_request:
     branches:
       - cluster
       - master
+      - '*-gr'
     paths:
       - '**.go'
 
