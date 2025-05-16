@@ -173,7 +173,7 @@ func (api *vmreadAPI) TSDBStatus(qt *querytracer.Tracer, sq *storage.SearchQuery
 	return api.s.GetTSDBStatus(qt, sq.AccountID, sq.ProjectID, tfss, date, focusLabel, topN, maxMetrics, deadline)
 }
 
-func (api *vmreadAPI) DeleteSeries(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) (int, error) {
+func (api *vmreadAPI) DeleteSeries(*querytracer.Tracer, *storage.SearchQuery, uint64) (int, error) {
 	return 0, nil
 }
 

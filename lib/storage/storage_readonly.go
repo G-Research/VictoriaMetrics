@@ -19,6 +19,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/workingsetcache"
 )
 
+// ReadOnlyConfig is config for read only storage
 type ReadOnlyConfig struct {
 	Retention          time.Duration
 	DisablePerDayIndex bool
@@ -26,6 +27,7 @@ type ReadOnlyConfig struct {
 	StoragePath        string
 }
 
+// ReadOnlyStorage is a read-only storage
 type ReadOnlyStorage struct {
 	retentionMsecs     int64
 	cachePath          string
@@ -56,6 +58,7 @@ type ReadOnlyStorage struct {
 	metricsTracker *metricnamestats.Tracker
 }
 
+// NewReadOnlyStorage returns a new read-only storage.
 func NewReadOnlyStorage(cfg *ReadOnlyConfig) *ReadOnlyStorage {
 	retention := cfg.Retention
 	if retention <= 0 || retention > retentionMax {
@@ -382,7 +385,7 @@ func (s *ReadOnlyStorage) GetTSDBStatus(qt *querytracer.Tracer, accountID, proje
 //
 // The the MetricRow.Timestamp is used for registering the metric name at the given day according to the timestamp.
 // Th MetricRow.Value field is ignored.
-func (s *ReadOnlyStorage) RegisterMetricNames(qt *querytracer.Tracer, mrs []MetricRow) {
+func (s *ReadOnlyStorage) RegisterMetricNames(_ *querytracer.Tracer, _ []MetricRow) {
 	panic("not implemented")
 }
 

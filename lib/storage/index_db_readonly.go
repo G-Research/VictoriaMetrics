@@ -33,10 +33,6 @@ type readOnlyIndexDB struct {
 	// if the mustDrop is set to true, then the indexDBReadOnly must be dropped after refCount reaches zero.
 	mustDrop atomic.Bool
 
-	// The number of missing MetricID -> TSID entries.
-	// High rate for this value means corrupted indexDBReadOnly.
-	missingTSIDsForMetricID atomic.Uint64
-
 	// The number of calls for date range searches.
 	dateRangeSearchCalls atomic.Uint64
 
@@ -45,11 +41,6 @@ type readOnlyIndexDB struct {
 
 	// The number of calls for global search.
 	globalSearchCalls atomic.Uint64
-
-	// missingMetricNamesForMetricID is a counter of missing MetricID -> MetricName entries.
-	// High rate may mean corrupted indexDBReadOnly due to unclean shutdown.
-	// The db must be automatically recovered after that.
-	missingMetricNamesForMetricID atomic.Uint64
 
 	// generation identifies the index generation ID
 	// and is used for syncing items from different indexDBReadOnlys
@@ -98,9 +89,9 @@ func getCurrentIndexDBPath(indexDBpath string) (string, error) {
 }
 
 func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) *readOnlyIndexDB {
-	if s == nil {
-		logger.Panicf("BUG: Storage must be non-nil")
-	}
+	// if s == nil {
+	// 	logger.Panicf("BUG: Storage must be non-nil")
+	// }
 
 	var indexDBPath string
 	for range 5 {
@@ -124,7 +115,7 @@ func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) *readOnlyIndexD
 	// Do not persist tagFiltersToMetricIDsCache in files, since it is very volatile because of tagFiltersKeyGen.
 	mem := memory.Allowed()
 
-	tb := mergeset.MustOpenTableReadOnly(indexDBPath, dataFlushInterval, invalidateTagFiltersCache, mergeTagToMetricIDsRows)
+	tb := mergeset.MustOpenTableReadOnly(indexDBPath)
 
 	db := &readOnlyIndexDB{
 		generation: gen,
@@ -1250,40 +1241,6 @@ func (db *readOnlyIndexDB) searchMetricName(dst []byte, metricID uint64, account
 	}
 
 	return dst, false
-}
-
-func (db *readOnlyIndexDB) loadDeletedMetricIDs() (*uint64set.Set, error) {
-	is := db.getIndexSearch(0, 0, noDeadline)
-	dmis, err := is.loadDeletedMetricIDs()
-	db.putIndexSearch(is)
-	if err != nil {
-		return nil, err
-	}
-	return dmis, nil
-}
-
-func (is *indexSearchReadOnly) loadDeletedMetricIDs() (*uint64set.Set, error) {
-	dmis := &uint64set.Set{}
-	ts := &is.ts
-	kb := &is.kb
-	kb.B = append(kb.B[:0], nsPrefixDeletedMetricID)
-	ts.Seek(kb.B)
-	for ts.NextItem() {
-		item := ts.Item
-		if !bytes.HasPrefix(item, kb.B) {
-			break
-		}
-		item = item[len(kb.B):]
-		if len(item) != 8 {
-			return nil, fmt.Errorf("unexpected item len; got %d bytes; want %d bytes", len(item), 8)
-		}
-		metricID := encoding.UnmarshalUint64(item)
-		dmis.Add(metricID)
-	}
-	if err := ts.Error(); err != nil {
-		return nil, err
-	}
-	return dmis, nil
 }
 
 // searchMetricIDs returns metricIDs for the given tfss and tr.

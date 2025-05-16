@@ -126,6 +126,7 @@ func MustOpen(path string, nocache bool) *Reader {
 	return r
 }
 
+// Open opens the file from the given path in nocache mode.
 func Open(path string, nocache bool) (*Reader, error) {
 	f, err := os.Open(path)
 	if err != nil {

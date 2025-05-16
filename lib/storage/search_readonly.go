@@ -11,12 +11,10 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/querytracer"
 )
 
-// Search is a search for time series.
+// ReadOnlySearch is a search for time series.
 type ReadOnlySearch struct {
 	// MetricBlockRef is updated with each Search.NextMetricBlock call.
 	MetricBlockRef MetricBlockRef
-
-	tb *readOnlyTable
 
 	// idb is used for MetricName lookup for the found data blocks.
 	idb *readOnlyIndexDB
