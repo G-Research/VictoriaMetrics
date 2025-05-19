@@ -4,7 +4,7 @@ run-vmselect:
 	mkdir -p vmselect-cache
 	DOCKER_OPTS='-v $(shell pwd)/vmselect-cache:/cache' \
 	APP_NAME=vmselect \
-	ARGS='-storageNode=localhost -selectNode=localhost -cacheDataPath=/cache' \
+	ARGS='-storageNode=localhost:8402 -cacheDataPath=/cache' \
 	$(MAKE) run-via-docker
 
 vmselect:

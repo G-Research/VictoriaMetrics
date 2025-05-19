@@ -12,9 +12,11 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
 )
 
-var idxbCache = blockcache.NewCache(getMaxIndexBlocksCacheSize)
-var ibCache = blockcache.NewCache(getMaxInmemoryBlocksCacheSize)
-var ibSparseCache = blockcache.NewCache(getMaxInmemoryBlocksSparseCacheSize)
+var (
+	idxbCache     = blockcache.NewCache(getMaxIndexBlocksCacheSize)
+	ibCache       = blockcache.NewCache(getMaxInmemoryBlocksCacheSize)
+	ibSparseCache = blockcache.NewCache(getMaxInmemoryBlocksSparseCacheSize)
+)
 
 // SetIndexBlocksCacheSize overrides the default size of indexdb/indexBlocks cache
 func SetIndexBlocksCacheSize(size int) {

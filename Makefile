@@ -1,4 +1,5 @@
 PKG_PREFIX := github.com/VictoriaMetrics/VictoriaMetrics
+SHELL := /bin/bash
 
 MAKE_CONCURRENCY ?= $(shell getconf _NPROCESSORS_ONLN)
 MAKE_PARALLEL := $(MAKE) -j $(MAKE_CONCURRENCY)
@@ -26,7 +27,8 @@ include package/release/Makefile
 all: \
 	vminsert \
 	vmselect \
-	vmstorage
+	vmstorage \
+	vmread
 
 all-pure: \
 	vminsert-pure \

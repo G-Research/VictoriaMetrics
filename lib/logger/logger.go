@@ -227,8 +227,7 @@ func (ll *logLimit) needSuppress(location string, limit uint64) (bool, string) {
 	return false, msg
 }
 
-type logWriter struct {
-}
+type logWriter struct{}
 
 func (lw *logWriter) Write(p []byte) (int, error) {
 	logLevelSkipframes(2, "ERROR", "%s", []any{p})

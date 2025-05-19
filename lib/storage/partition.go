@@ -2088,6 +2088,31 @@ func mustReadPartNames(partsFile, smallPartsPath, bigPartsPath string) ([]string
 	return partNamesSmall, partNamesBig
 }
 
+func mustReadPartNamesReadOnly(partsFile, smallPartsPath, bigPartsPath string) ([]string, []string, error) {
+	if fs.IsPathExist(partsFile) {
+		data, err := os.ReadFile(partsFile)
+		if err != nil {
+			return nil, nil, fmt.Errorf("cannot read %q: %s", partsFile, err)
+		}
+		var partNames partNamesJSON
+		if err := json.Unmarshal(data, &partNames); err != nil {
+			return nil, nil, fmt.Errorf("cannot parse %q: %s", partsFile, err)
+		}
+		return partNames.Small, partNames.Big, nil
+	}
+	// The partsFile is missing. This is the upgrade from versions previous to v1.90.0.
+	// Read part names from smallPartsPath and bigPartsPath directories
+	partNamesSmall, err := mustReadPartNamesFromDirReadOnly(smallPartsPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read small parts path %q: %w", smallPartsPath, err)
+	}
+	partNamesBig, err := mustReadPartNamesFromDirReadOnly(bigPartsPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read big parts path %q: %w", bigPartsPath, err)
+	}
+	return partNamesSmall, partNamesBig, nil
+}
+
 func mustReadPartNamesFromDir(srcDir string) []string {
 	if !fs.IsPathExist(srcDir) {
 		return nil
@@ -2107,6 +2132,30 @@ func mustReadPartNamesFromDir(srcDir string) []string {
 		partNames = append(partNames, partName)
 	}
 	return partNames
+}
+
+func mustReadPartNamesFromDirReadOnly(srcDir string) ([]string, error) {
+	if !fs.IsPathExist(srcDir) {
+		return nil, nil
+	}
+	des, err := os.ReadDir(srcDir)
+	if err != nil {
+		return nil, err
+	}
+	var partNames []string
+	for _, de := range des {
+		if !fs.IsDirOrSymlink(de) {
+			// Skip non-directories.
+			continue
+		}
+		partName := de.Name()
+		if isSpecialDir(partName) {
+			// Skip special dirs.
+			continue
+		}
+		partNames = append(partNames, partName)
+	}
+	return partNames, nil
 }
 
 func isSpecialDir(name string) bool {
