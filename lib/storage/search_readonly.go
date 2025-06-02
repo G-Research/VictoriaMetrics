@@ -82,7 +82,11 @@ func (s *ReadOnlySearch) Init(qt *querytracer.Tracer, storage *ReadOnlyStorage, 
 	s.reset()
 
 	idbPath := filepath.Join(storage.storagePath, indexdbDirname)
-	s.idb = openReadOnlyCurrentIndexDB(idbPath, storage)
+	var err error
+	s.idb, err = openReadOnlyCurrentIndexDB(idbPath, storage)
+	if err != nil {
+		return 0
+	}
 	s.retentionDeadline = retentionDeadline
 	s.tr = tr
 	s.tfss = tfss

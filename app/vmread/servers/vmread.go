@@ -12,6 +12,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/httpserver"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/panicutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/querytracer"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/storage"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/vmselectapi"
@@ -66,25 +67,29 @@ type vmreadAPI struct {
 }
 
 func (api *vmreadAPI) InitSearch(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) (vmselectapi.BlockIterator, error) {
-	tr := sq.GetTimeRange()
-	if err := checkTimeRange(api.s, tr); err != nil {
-		return nil, err
-	}
-	maxMetrics := getMaxMetrics(sq.MaxMetrics)
-	tfss, err := api.setupTfss(qt, sq, tr, maxMetrics, deadline)
-	if err != nil {
-		return nil, err
-	}
-	if len(tfss) == 0 {
-		return nil, fmt.Errorf("missing tag filters")
-	}
-	bi := getBlockIterator()
-	bi.sr.Init(qt, api.s, tfss, tr, maxMetrics, deadline)
-	if err := bi.sr.Error(); err != nil {
-		bi.MustClose()
-		return nil, err
-	}
-	return bi, nil
+	var bi *blockIterator
+	err := panicutil.ToError(func() error {
+		tr := sq.GetTimeRange()
+		if err := checkTimeRange(api.s, tr); err != nil {
+			return fmt.Errorf("cannot search for series in the given time range %s: %w", &tr, err)
+		}
+		maxMetrics := getMaxMetrics(sq.MaxMetrics)
+		tfss, err := api.setupTfss(qt, sq, tr, maxMetrics, deadline)
+		if err != nil {
+			return fmt.Errorf("cannot setup tag filters for search query %q: %w", sq, err)
+		}
+		if len(tfss) == 0 {
+			return fmt.Errorf("missing tag filters")
+		}
+		bi = getBlockIterator()
+		bi.sr.Init(qt, api.s, tfss, tr, maxMetrics, deadline)
+		if err := bi.sr.Error(); err != nil {
+			bi.MustClose()
+			return err
+		}
+		return nil
+	})
+	return bi, err
 }
 
 func (api *vmreadAPI) SearchMetricNames(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) ([]string, error) {

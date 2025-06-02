@@ -207,7 +207,10 @@ func (s *ReadOnlyStorage) SearchMetricNames(qt *querytracer.Tracer, tfss []*TagF
 	defer qt.Done()
 
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
-	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	idb, err := openReadOnlyCurrentIndexDB(idbPath, s)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open indexdb at %q: %w", idbPath, err)
+	}
 	defer idb.MustClose()
 
 	metricIDs, err := idb.searchMetricIDs(qt, tfss, tr, maxMetrics, deadline)
@@ -262,7 +265,10 @@ func (s *ReadOnlyStorage) SearchMetricNames(qt *querytracer.Tracer, tfss []*TagF
 // retention period, i.e. the global index are used for searching.
 func (s *ReadOnlyStorage) SearchLabelValues(qt *querytracer.Tracer, accountID, projectID uint32, labelName string, tfss []*TagFilters, tr TimeRange, maxLabelValues, maxMetrics int, deadline uint64) ([]string, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
-	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	idb, err := openReadOnlyCurrentIndexDB(idbPath, s)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open indexdb at %q: %w", idbPath, err)
+	}
 	defer idb.MustClose()
 	tr = s.adjustTimeRange(tr)
 
@@ -322,7 +328,10 @@ func (s *ReadOnlyStorage) SearchTagValueSuffixes(qt *querytracer.Tracer, account
 	delimiter byte, maxTagValueSuffixes int, deadline uint64,
 ) ([]string, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
-	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	idb, err := openReadOnlyCurrentIndexDB(idbPath, s)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open indexdb at %q: %w", idbPath, err)
+	}
 	defer idb.MustClose()
 	tr = s.adjustTimeRange(tr)
 	return idb.SearchTagValueSuffixes(qt, accountID, projectID, tr, tagKey, tagValuePrefix, delimiter, maxTagValueSuffixes, deadline)
@@ -339,7 +348,10 @@ func (s *ReadOnlyStorage) SearchTagValueSuffixes(qt *querytracer.Tracer, account
 // retention period, i.e. the global index are used for searching.
 func (s *ReadOnlyStorage) SearchLabelNames(qt *querytracer.Tracer, accountID, projectID uint32, tfss []*TagFilters, tr TimeRange, maxLabelNames, maxMetrics int, deadline uint64) ([]string, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
-	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	idb, err := openReadOnlyCurrentIndexDB(idbPath, s)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open indexdb at %q: %w", idbPath, err)
+	}
 	defer idb.MustClose()
 	tr = s.adjustTimeRange(tr)
 	return idb.SearchLabelNames(qt, accountID, projectID, tfss, tr, maxLabelNames, maxMetrics, deadline)
@@ -351,7 +363,10 @@ func (s *ReadOnlyStorage) SearchLabelNames(qt *querytracer.Tracer, accountID, pr
 // up to two times - in db and extDB.
 func (s *ReadOnlyStorage) GetSeriesCount(accountID, projectID uint32, deadline uint64) (uint64, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
-	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	idb, err := openReadOnlyCurrentIndexDB(idbPath, s)
+	if err != nil {
+		return 0, fmt.Errorf("cannot open indexdb at %q: %w", idbPath, err)
+	}
 	defer idb.MustClose()
 	return idb.GetSeriesCount(accountID, projectID, deadline)
 }
@@ -359,7 +374,10 @@ func (s *ReadOnlyStorage) GetSeriesCount(accountID, projectID uint32, deadline u
 // SearchTenants returns list of registered tenants on the given tr.
 func (s *ReadOnlyStorage) SearchTenants(qt *querytracer.Tracer, tr TimeRange, deadline uint64) ([]string, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
-	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	idb, err := openReadOnlyCurrentIndexDB(idbPath, s)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open indexdb at %q: %w", idbPath, err)
+	}
 	defer idb.MustClose()
 	return idb.SearchTenants(qt, tr, deadline)
 }
@@ -373,7 +391,10 @@ func (s *ReadOnlyStorage) SearchTenants(qt *querytracer.Tracer, tr TimeRange, de
 // retention period, i.e. the global index are used for calculation.
 func (s *ReadOnlyStorage) GetTSDBStatus(qt *querytracer.Tracer, accountID, projectID uint32, tfss []*TagFilters, date uint64, focusLabel string, topN, maxMetrics int, deadline uint64) (*TSDBStatus, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
-	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	idb, err := openReadOnlyCurrentIndexDB(idbPath, s)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open indexdb at %q: %w", idbPath, err)
+	}
 	defer idb.MustClose()
 	if s.disablePerDayIndex {
 		date = globalIndexDate
@@ -401,7 +422,10 @@ func (s *ReadOnlyStorage) RegisterMetricNames(_ *querytracer.Tracer, _ []MetricR
 // retention period, i.e. global index are used for searching.
 func (s *ReadOnlyStorage) SearchGraphitePaths(qt *querytracer.Tracer, accountID, projectID uint32, tr TimeRange, query []byte, maxPaths int, deadline uint64) ([]string, error) {
 	idbPath := filepath.Join(s.storagePath, indexdbDirname)
-	idb := openReadOnlyCurrentIndexDB(idbPath, s)
+	idb, err := openReadOnlyCurrentIndexDB(idbPath, s)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open indexdb at %q: %w", idbPath, err)
+	}
 	defer idb.MustClose()
 	tr = s.adjustTimeRange(tr)
 	query = replaceAlternateRegexpsWithGraphiteWildcards(query)

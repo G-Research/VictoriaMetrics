@@ -6,12 +6,12 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/blockcache"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/panicutil"
 )
 
 // partSearch represents blocks stream for the given search args
@@ -183,20 +183,19 @@ func (ps *partSearch) nextBHS() bool {
 		b := ibCache.GetBlock(indexBlockKey)
 		if b == nil {
 			// Slow path - actually read and unpack the index block.
-			for range 5 {
-				ib, err := ps.readIndexBlock(mr)
-				if err != nil {
-					ps.err = fmt.Errorf("cannot read index block for part %q at offset %d with size %d: %w",
-						&ps.p.ph, mr.IndexBlockOffset, mr.IndexBlockSize, err)
-					time.Sleep(100 * time.Millisecond)
-					continue
-				}
-				b = ib
-				ibCache.PutBlock(indexBlockKey, b)
-			}
-			if b == nil {
+			ib, err := ps.readIndexBlock(mr)
+			if err != nil {
+				ps.err = fmt.Errorf(
+					"cannot read index block for part %q at offset %d with size %d: %w",
+					&ps.p.ph,
+					mr.IndexBlockOffset,
+					mr.IndexBlockSize,
+					err,
+				)
 				return false
 			}
+			b = ib
+			ibCache.PutBlock(indexBlockKey, b)
 		}
 		ib := b.(*indexBlock)
 		ps.bhs = ib.bhs
@@ -248,7 +247,18 @@ func (ps *partSearch) readIndexBlock(mr *metaindexRow) (ib *indexBlock, err erro
 		}
 	}()
 	ps.compressedIndexBuf = bytesutil.ResizeNoCopyMayOverallocate(ps.compressedIndexBuf, int(mr.IndexBlockSize))
-	ps.p.indexFile.MustReadAt(ps.compressedIndexBuf, int64(mr.IndexBlockOffset))
+	if err := panicutil.ToError(func() error {
+		ps.p.indexFile.MustReadAt(ps.compressedIndexBuf, int64(mr.IndexBlockOffset))
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf(
+			"cannot read index block for part %q at offset %d with size %d: %w",
+			&ps.p.ph,
+			mr.IndexBlockOffset,
+			mr.IndexBlockSize,
+			err,
+		)
+	}
 
 	ps.indexBuf, err = encoding.DecompressZSTD(ps.indexBuf[:0], ps.compressedIndexBuf)
 	if err != nil {

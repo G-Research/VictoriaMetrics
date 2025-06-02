@@ -98,8 +98,8 @@ outer:
 			}
 			pw.incRef()
 			pws = append(pws, pw)
-			break
 		}
+		break
 	}
 
 	if i == 5 {

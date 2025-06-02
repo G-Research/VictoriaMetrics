@@ -186,6 +186,18 @@ func MustFileSize(path string) uint64 {
 	return uint64(fi.Size())
 }
 
+// ShouldFileSize returns file size for the given path.
+func ShouldFileSize(path string) (uint64, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("cannot stat %q: %s", path, err)
+	}
+	if fi.IsDir() {
+		return 0, fmt.Errorf("FATAL: %q must be a file, not a directory", path)
+	}
+	return uint64(fi.Size()), nil
+}
+
 // IsPathExist returns whether the given path exists.
 func IsPathExist(path string) bool {
 	if _, err := os.Stat(path); err != nil {

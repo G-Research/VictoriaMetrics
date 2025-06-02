@@ -20,6 +20,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/panicutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/querytracer"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/uint64set"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/workingsetcache"
@@ -88,7 +89,7 @@ func getCurrentIndexDBPath(indexDBpath string) (string, error) {
 	return filepath.Join(indexDBpath, tableNames[len(tableNames)-2]), nil
 }
 
-func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) *readOnlyIndexDB {
+func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) (*readOnlyIndexDB, error) {
 	// if s == nil {
 	// 	logger.Panicf("BUG: Storage must be non-nil")
 	// }
@@ -115,7 +116,13 @@ func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) *readOnlyIndexD
 	// Do not persist tagFiltersToMetricIDsCache in files, since it is very volatile because of tagFiltersKeyGen.
 	mem := memory.Allowed()
 
-	tb := mergeset.MustOpenTableReadOnly(indexDBPath)
+	var tb *mergeset.ReadOnlyTable
+	if err := panicutil.ToError(func() error {
+		tb = mergeset.MustOpenTableReadOnly(indexDBPath)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("cannot open index db at %q: %w", indexDBPath, err)
+	}
 
 	db := &readOnlyIndexDB{
 		generation: gen,
@@ -126,7 +133,7 @@ func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) *readOnlyIndexD
 		loopsPerDateTagFilterCache: workingsetcache.New(mem / 128),
 	}
 	db.incRef()
-	return db
+	return db, nil
 }
 
 // doExtDB calls f for non-nil db.extDB.

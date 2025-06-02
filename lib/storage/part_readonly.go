@@ -21,22 +21,34 @@ func openFilePart(path string) (*part, error) {
 
 	timestampsPath := filepath.Join(path, timestampsFilename)
 	timestampsFile := fs.MustOpenReaderAt(timestampsPath)
-	timestampsSize := fs.MustFileSize(timestampsPath)
+	timestampsSize, err := fs.ShouldFileSize(timestampsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get timestamps file size: %w", err)
+	}
 
 	valuesPath := filepath.Join(path, valuesFilename)
 	valuesFile := fs.MustOpenReaderAt(valuesPath)
-	valuesSize := fs.MustFileSize(valuesPath)
+	valuesSize, err := fs.ShouldFileSize(valuesPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get values file size: %w", err)
+	}
 
 	indexPath := filepath.Join(path, indexFilename)
 	indexFile := fs.MustOpenReaderAt(indexPath)
-	indexSize := fs.MustFileSize(indexPath)
+	indexSize, err := fs.ShouldFileSize(indexPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get index file size: %w", err)
+	}
 
 	metaindexPath := filepath.Join(path, metaindexFilename)
 	metaindexFile, err := filestream.Open(metaindexPath, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open main index path: %w", err)
 	}
-	metaindexSize := fs.MustFileSize(metaindexPath)
+	metaindexSize, err := fs.ShouldFileSize(metaindexPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get metaindex file size: %w", err)
+	}
 
 	size := timestampsSize + valuesSize + indexSize + metaindexSize
 	return newPartReadOnly(&ph, path, size, metaindexFile, timestampsFile, valuesFile, indexFile)

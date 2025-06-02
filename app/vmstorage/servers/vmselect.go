@@ -12,6 +12,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/httpserver"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/panicutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/querytracer"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/storage"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/vmselectapi"
@@ -240,7 +241,8 @@ func (api *vmstorageAPI) setupTfss(qt *querytracer.Tracer, sq *storage.SearchQue
 
 // blockIterator implements vmselectapi.BlockIterator
 type blockIterator struct {
-	sr storage.Search
+	sr  storage.Search
+	err error
 }
 
 var blockIteratorsPool sync.Pool
@@ -263,11 +265,21 @@ func (bi *blockIterator) NextBlock(mb *storage.MetricBlock) bool {
 		return false
 	}
 	mb.MetricName = append(mb.MetricName[:0], bi.sr.MetricBlockRef.MetricName...)
-	bi.sr.MetricBlockRef.BlockRef.MustReadBlock(&mb.Block)
+	if err := panicutil.ToError(func() error {
+		bi.sr.MetricBlockRef.BlockRef.MustReadBlock(&mb.Block)
+		return nil
+	}); err != nil {
+		bi.err = err
+		return false
+	}
+
 	return true
 }
 
 func (bi *blockIterator) Error() error {
+	if bi.err != nil {
+		return bi.err
+	}
 	return bi.sr.Error()
 }
 

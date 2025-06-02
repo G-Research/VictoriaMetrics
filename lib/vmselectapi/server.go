@@ -1049,33 +1049,54 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
 	}
 	defer s.endConcurrentRequest()
 
-	// Initiaialize the search.
-	bi, err := s.api.InitSearch(ctx.qt, &ctx.sq, ctx.deadline)
-	if err != nil {
-		return ctx.writeErrorMessage(err)
-	}
-	defer bi.MustClose()
+	var (
+		blocksRead int
+		errs       []error
+	)
 
-	// Send empty error message to vmselect.
-	if err := ctx.writeString(""); err != nil {
-		return fmt.Errorf("cannot send empty error message: %w", err)
-	}
-
-	// Send found blocks to vmselect.
-	blocksRead := 0
-	for bi.NextBlock(&ctx.mb) {
-		blocksRead++
-		s.metricBlocksRead.Inc()
-		s.metricRowsRead.Add(ctx.mb.Block.RowsCount())
-
-		ctx.dataBuf = ctx.mb.Marshal(ctx.dataBuf[:0])
-		if err := ctx.writeDataBufBytes(); err != nil {
-			return fmt.Errorf("cannot send MetricBlock: %w", err)
+	for range 5 {
+		// Initiaialize the search.
+		bi, err := s.api.InitSearch(ctx.qt, &ctx.sq, ctx.deadline)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("cannot initialize search: %w", err))
+			time.Sleep(100 * time.Second)
+			continue
 		}
+		defer bi.MustClose()
+
+		// Send empty error message to vmselect.
+		if err := ctx.writeString(""); err != nil {
+			errs = append(errs, fmt.Errorf("cannot send empty error message: %w", err))
+			time.Sleep(100 * time.Second)
+			continue
+		}
+
+		// Send found blocks to vmselect.
+		blocksRead = 0
+		for bi.NextBlock(&ctx.mb) {
+			blocksRead++
+			s.metricBlocksRead.Inc()
+			s.metricRowsRead.Add(ctx.mb.Block.RowsCount())
+
+			ctx.dataBuf = ctx.mb.Marshal(ctx.dataBuf[:0])
+			if err := ctx.writeDataBufBytes(); err != nil {
+				logger.Errorf("cannot send MetricBlock with %d rows to vmselect: %w", ctx.mb.Block.RowsCount(), err)
+			}
+		}
+
+		if err := bi.Error(); err != nil {
+			errs = append(errs, fmt.Errorf("cannot read next block: %w", err))
+			time.Sleep(100 * time.Second)
+			continue
+		}
+
+		break
 	}
-	if err := bi.Error(); err != nil {
-		return fmt.Errorf("search error: %w", err)
+
+	if len(errs) >= 5 {
+		return fmt.Errorf("search errors: %w", errors.Join(errs...))
 	}
+
 	ctx.qt.Printf("sent %d blocks to vmselect", blocksRead)
 
 	// Send 'end of response' marker
