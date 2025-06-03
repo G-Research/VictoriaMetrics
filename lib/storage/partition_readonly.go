@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
@@ -62,50 +61,31 @@ func openParts(partsFile, path string, partNames []string) ([]*partWrapper, erro
 
 	// Open parts
 	var pws []*partWrapper
-	var i int
 	m := make(map[string]struct{}, len(partNames))
-outer:
-	for i = range 5 {
-		pws = pws[:0]
-		clear(m)
-		for _, partName := range partNames {
-			// Make sure the partName exists on disk.
-			// If it is missing, then manual action from the user is needed,
-			// since this is unexpected state, which cannot occur under normal operation,
-			// including unclean shutdown.
-			partPath := filepath.Join(path, partName)
-			if !fs.IsPathExist(partPath) {
-				logger.Errorf("part %q is listed in %q, but is missing on disk; "+
-					"ensure %q contents is not corrupted; remove %q to rebuild its content from the list of existing parts",
-					partPath, partsFile, partsFile, partsFile)
-				time.Sleep(100 * time.Millisecond)
-				continue outer
-			}
-
-			m[partName] = struct{}{}
+	for _, partName := range partNames {
+		// Make sure the partName exists on disk.
+		// If it is missing, then manual action from the user is needed,
+		// since this is unexpected state, which cannot occur under normal operation,
+		// including unclean shutdown.
+		partPath := filepath.Join(path, partName)
+		if !fs.IsPathExist(partPath) {
+			return nil, fmt.Errorf("part %q is missing on disk; partsFile=%q; path=%q; partNames=%q; this is unexpected state, which cannot occur under normal operation, including unclean shutdown; manual action is needed to fix the issue", partName, partsFile, path, strings.Join(partNames, ", "))
 		}
 
-		for _, partName := range partNames {
-			partPath := filepath.Join(path, partName)
-			p, err := openFilePart(partPath)
-			if err != nil {
-				logger.Errorf("failed to open file part %q: %w", partPath, err)
-				time.Sleep(100 * time.Millisecond)
-				continue outer
-			}
-			pw := &partWrapper{
-				p: p,
-			}
-			pw.incRef()
-			pws = append(pws, pw)
-		}
-		break
+		m[partName] = struct{}{}
 	}
 
-	if i == 5 {
-		return nil, fmt.Errorf("failed to open %d parts from %q after 5 attempts", len(partNames), path)
-	} else if i > 0 {
-		logger.Infof("opened %d parts from %q after %d attempts", len(partNames), path, i)
+	for _, partName := range partNames {
+		partPath := filepath.Join(path, partName)
+		p, err := openFilePart(partPath)
+		if err != nil {
+			return nil, fmt.Errorf("cannot open part %q for path %q: %w", partName, path, err)
+		}
+		pw := &partWrapper{
+			p: p,
+		}
+		pw.incRef()
+		pws = append(pws, pw)
 	}
 
 	return pws, nil

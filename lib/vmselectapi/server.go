@@ -17,6 +17,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/ingestserver"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/netutil"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/panicutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/querytracer"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/storage"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/timerpool"
@@ -569,34 +570,37 @@ func (s *Server) endConcurrentRequest() {
 }
 
 func (s *Server) processRPC(ctx *vmselectRequestCtx, rpcName string) error {
-	switch rpcName {
-	case "search_v7":
-		return s.processSearch(ctx)
-	case "searchMetricNames_v3":
-		return s.processSearchMetricNames(ctx)
-	case "labelValues_v5":
-		return s.processLabelValues(ctx)
-	case "tagValueSuffixes_v4":
-		return s.processTagValueSuffixes(ctx)
-	case "labelNames_v5":
-		return s.processLabelNames(ctx)
-	case "seriesCount_v4":
-		return s.processSeriesCount(ctx)
-	case "tsdbStatus_v6":
-		return s.processTSDBStatus(ctx)
-	case "deleteSeries_v5":
-		return s.processDeleteSeries(ctx)
-	case "registerMetricNames_v3":
-		return s.processRegisterMetricNames(ctx)
-	case "tenants_v1":
-		return s.processTenants(ctx)
-	case "metricNamesUsageStats_v1":
-		return s.processMetricNamesUsageStats(ctx)
-	case "resetMetricNamesStats_v1":
-		return s.processResetMetricUsageStats(ctx)
-	default:
-		return fmt.Errorf("unsupported rpcName: %q", rpcName)
-	}
+	_, err := panicutil.ToErrorWithRetry(5, func() error {
+		switch rpcName {
+		case "search_v7":
+			return s.processSearch(ctx)
+		case "searchMetricNames_v3":
+			return s.processSearchMetricNames(ctx)
+		case "labelValues_v5":
+			return s.processLabelValues(ctx)
+		case "tagValueSuffixes_v4":
+			return s.processTagValueSuffixes(ctx)
+		case "labelNames_v5":
+			return s.processLabelNames(ctx)
+		case "seriesCount_v4":
+			return s.processSeriesCount(ctx)
+		case "tsdbStatus_v6":
+			return s.processTSDBStatus(ctx)
+		case "deleteSeries_v5":
+			return s.processDeleteSeries(ctx)
+		case "registerMetricNames_v3":
+			return s.processRegisterMetricNames(ctx)
+		case "tenants_v1":
+			return s.processTenants(ctx)
+		case "metricNamesUsageStats_v1":
+			return s.processMetricNamesUsageStats(ctx)
+		case "resetMetricNamesStats_v1":
+			return s.processResetMetricUsageStats(ctx)
+		default:
+			return fmt.Errorf("unsupported rpcName: %q", rpcName)
+		}
+	})
+	return err
 }
 
 const (
@@ -1049,52 +1053,33 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
 	}
 	defer s.endConcurrentRequest()
 
-	var (
-		blocksRead int
-		errs       []error
-	)
+	// Initiaialize the search.
+	bi, err := s.api.InitSearch(ctx.qt, &ctx.sq, ctx.deadline)
+	if err != nil {
+		return ctx.writeErrorMessage(err)
+	}
+	defer bi.MustClose()
 
-	for range 5 {
-		// Initiaialize the search.
-		bi, err := s.api.InitSearch(ctx.qt, &ctx.sq, ctx.deadline)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("cannot initialize search: %w", err))
-			time.Sleep(100 * time.Second)
-			continue
-		}
-		defer bi.MustClose()
-
-		// Send empty error message to vmselect.
-		if err := ctx.writeString(""); err != nil {
-			errs = append(errs, fmt.Errorf("cannot send empty error message: %w", err))
-			time.Sleep(100 * time.Second)
-			continue
-		}
-
-		// Send found blocks to vmselect.
-		blocksRead = 0
-		for bi.NextBlock(&ctx.mb) {
-			blocksRead++
-			s.metricBlocksRead.Inc()
-			s.metricRowsRead.Add(ctx.mb.Block.RowsCount())
-
-			ctx.dataBuf = ctx.mb.Marshal(ctx.dataBuf[:0])
-			if err := ctx.writeDataBufBytes(); err != nil {
-				logger.Errorf("cannot send MetricBlock with %d rows to vmselect: %w", ctx.mb.Block.RowsCount(), err)
-			}
-		}
-
-		if err := bi.Error(); err != nil {
-			errs = append(errs, fmt.Errorf("cannot read next block: %w", err))
-			time.Sleep(100 * time.Second)
-			continue
-		}
-
-		break
+	// Send empty error message to vmselect.
+	if err := ctx.writeString(""); err != nil {
+		return fmt.Errorf("cannot send empty error message: %w", err)
 	}
 
-	if len(errs) >= 5 {
-		return fmt.Errorf("search errors: %w", errors.Join(errs...))
+	// Send found blocks to vmselect.
+	blocksRead := 0
+	for bi.NextBlock(&ctx.mb) {
+		blocksRead++
+		s.metricBlocksRead.Inc()
+		s.metricRowsRead.Add(ctx.mb.Block.RowsCount())
+
+		ctx.dataBuf = ctx.mb.Marshal(ctx.dataBuf[:0])
+		if err := ctx.writeDataBufBytes(); err != nil {
+			return fmt.Errorf("cannot send block with %d rows to vmselect: %w", ctx.mb.Block.RowsCount(), err)
+		}
+	}
+
+	if err := bi.Error(); err != nil {
+		return fmt.Errorf("cannot read search results: %w", err)
 	}
 
 	ctx.qt.Printf("sent %d blocks to vmselect", blocksRead)

@@ -68,7 +68,7 @@ type vmreadAPI struct {
 
 func (api *vmreadAPI) InitSearch(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) (vmselectapi.BlockIterator, error) {
 	var bi *blockIterator
-	err := panicutil.ToError(func() error {
+	tries, err := panicutil.ToErrorWithRetry(5, func() error {
 		tr := sq.GetTimeRange()
 		if err := checkTimeRange(api.s, tr); err != nil {
 			return fmt.Errorf("cannot search for series in the given time range %s: %w", &tr, err)
@@ -89,77 +89,148 @@ func (api *vmreadAPI) InitSearch(qt *querytracer.Tracer, sq *storage.SearchQuery
 		}
 		return nil
 	})
+	if err != nil {
+		logger.Errorf("Failed to InitSearch after %d tries: %v", sq, err)
+	} else {
+		logger.Infof("InitSearch for %q took %d tries", sq, tries)
+	}
 	return bi, err
 }
 
 func (api *vmreadAPI) SearchMetricNames(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) ([]string, error) {
-	tr := sq.GetTimeRange()
-	maxMetrics := sq.MaxMetrics
-	if maxMetrics <= 0 {
-		// fallback to maxUniqueTimeSeries if no limit is provided,
-		// see https://github.com/VictoriaMetrics/VictoriaMetrics/issues/7857
-		maxMetrics = GetMaxUniqueTimeSeries()
-	}
-	tfss, err := api.setupTfss(qt, sq, tr, maxMetrics, deadline)
+	var metricNames []string
+	tries, err := panicutil.ToErrorWithRetry(5, func() error {
+		tr := sq.GetTimeRange()
+		maxMetrics := sq.MaxMetrics
+		if maxMetrics <= 0 {
+			// fallback to maxUniqueTimeSeries if no limit is provided,
+			// see https://github.com/VictoriaMetrics/VictoriaMetrics/issues/7857
+			maxMetrics = GetMaxUniqueTimeSeries()
+		}
+		tfss, err := api.setupTfss(qt, sq, tr, maxMetrics, deadline)
+		if err != nil {
+			return err
+		}
+		if len(tfss) == 0 {
+			return fmt.Errorf("missing tag filters")
+		}
+		metricNames, err = api.s.SearchMetricNames(qt, tfss, tr, maxMetrics, deadline)
+		return err
+	})
 	if err != nil {
-		return nil, err
+		logger.Errorf("Failed to SearchMetricNames after %d tries: %v", sq, err)
+	} else {
+		logger.Infof("SearchMetricNames for %q took %d tries", sq, tries)
 	}
-	if len(tfss) == 0 {
-		return nil, fmt.Errorf("missing tag filters")
-	}
-	return api.s.SearchMetricNames(qt, tfss, tr, maxMetrics, deadline)
+
+	return metricNames, err
 }
 
 func (api *vmreadAPI) LabelValues(qt *querytracer.Tracer, sq *storage.SearchQuery, labelName string, maxLabelValues int, deadline uint64) ([]string, error) {
-	tr := sq.GetTimeRange()
-	maxMetrics := sq.MaxMetrics
-	if maxMetrics <= 0 {
-		// fallback to maxUniqueTimeSeries if no limit is provided,
-		// see https://github.com/VictoriaMetrics/VictoriaMetrics/issues/7857
-		maxMetrics = GetMaxUniqueTimeSeries()
-	}
-	tfss, err := api.setupTfss(qt, sq, tr, maxMetrics, deadline)
+	var labelValues []string
+	tries, err := panicutil.ToErrorWithRetry(5, func() error {
+		tr := sq.GetTimeRange()
+		maxMetrics := sq.MaxMetrics
+		if maxMetrics <= 0 {
+			// fallback to maxUniqueTimeSeries if no limit is provided,
+			// see https://github.com/VictoriaMetrics/VictoriaMetrics/issues/7857
+			maxMetrics = GetMaxUniqueTimeSeries()
+		}
+		tfss, err := api.setupTfss(qt, sq, tr, maxMetrics, deadline)
+		if err != nil {
+			return err
+		}
+		labelValues, err = api.s.SearchLabelValues(qt, sq.AccountID, sq.ProjectID, labelName, tfss, tr, maxLabelValues, maxMetrics, deadline)
+		return err
+	})
 	if err != nil {
-		return nil, err
+		logger.Errorf("Failed to LabelValues after %d tries: %v", sq, err)
+	} else {
+		logger.Infof("LabelValues for %q took %d tries", sq, tries)
 	}
-	return api.s.SearchLabelValues(qt, sq.AccountID, sq.ProjectID, labelName, tfss, tr, maxLabelValues, maxMetrics, deadline)
+
+	return labelValues, err
 }
 
 func (api *vmreadAPI) TagValueSuffixes(qt *querytracer.Tracer, accountID, projectID uint32, tr storage.TimeRange, tagKey, tagValuePrefix string, delimiter byte,
 	maxSuffixes int, deadline uint64,
 ) ([]string, error) {
-	suffixes, err := api.s.SearchTagValueSuffixes(qt, accountID, projectID, tr, tagKey, tagValuePrefix, delimiter, maxSuffixes, deadline)
+	var valueSuffixes []string
+	tries, err := panicutil.ToErrorWithRetry(5, func() error {
+		suffixes, err := api.s.SearchTagValueSuffixes(qt, accountID, projectID, tr, tagKey, tagValuePrefix, delimiter, maxSuffixes, deadline)
+		if err != nil {
+			return err
+		}
+		if len(suffixes) >= maxSuffixes {
+			return fmt.Errorf("more than -search.maxTagValueSuffixesPerSearch=%d suffixes returned; "+
+				"either narrow down the search or increase -search.maxTagValueSuffixesPerSearch command-line flag value", maxSuffixes)
+		}
+		valueSuffixes = suffixes
+		return nil
+	})
 	if err != nil {
-		return nil, err
+		logger.Errorf("Failed to TagValueSuffixes after %d tries: %v", tries, err)
+	} else {
+		logger.Infof("TagValueSuffixes took %d tries", tries)
 	}
-	if len(suffixes) >= maxSuffixes {
-		return nil, fmt.Errorf("more than -search.maxTagValueSuffixesPerSearch=%d suffixes returned; "+
-			"either narrow down the search or increase -search.maxTagValueSuffixesPerSearch command-line flag value", maxSuffixes)
-	}
-	return suffixes, nil
+	return valueSuffixes, err
 }
 
 func (api *vmreadAPI) LabelNames(qt *querytracer.Tracer, sq *storage.SearchQuery, maxLabelNames int, deadline uint64) ([]string, error) {
-	tr := sq.GetTimeRange()
-	maxMetrics := sq.MaxMetrics
-	if maxMetrics <= 0 {
-		// fallback to maxUniqueTimeSeries if no limit is provided,
-		// see https://github.com/VictoriaMetrics/VictoriaMetrics/issues/7857
-		maxMetrics = GetMaxUniqueTimeSeries()
-	}
-	tfss, err := api.setupTfss(qt, sq, tr, maxMetrics, deadline)
+	var labelNames []string
+	tries, err := panicutil.ToErrorWithRetry(5, func() error {
+		tr := sq.GetTimeRange()
+		maxMetrics := sq.MaxMetrics
+		if maxMetrics <= 0 {
+			// fallback to maxUniqueTimeSeries if no limit is provided,
+			// see https://github.com/VictoriaMetrics/VictoriaMetrics/issues/7857
+			maxMetrics = GetMaxUniqueTimeSeries()
+		}
+		tfss, err := api.setupTfss(qt, sq, tr, maxMetrics, deadline)
+		if err != nil {
+			return err
+		}
+		labelNames, err = api.s.SearchLabelNames(qt, sq.AccountID, sq.ProjectID, tfss, tr, maxLabelNames, maxMetrics, deadline)
+		return err
+	})
+
 	if err != nil {
-		return nil, err
+		logger.Errorf("Failed to LabelNames after %d tries: %v", tries, err)
+	} else {
+		logger.Infof("LabelNames for %q took %d tries", sq, tries)
 	}
-	return api.s.SearchLabelNames(qt, sq.AccountID, sq.ProjectID, tfss, tr, maxLabelNames, maxMetrics, deadline)
+
+	return labelNames, err
 }
 
 func (api *vmreadAPI) SeriesCount(_ *querytracer.Tracer, accountID, projectID uint32, deadline uint64) (uint64, error) {
-	return api.s.GetSeriesCount(accountID, projectID, deadline)
+	var result uint64
+	tries, err := panicutil.ToErrorWithRetry(5, func() error {
+		var err error
+		result, err = api.s.GetSeriesCount(accountID, projectID, deadline)
+		return err
+	})
+	if err != nil {
+		logger.Errorf("Failed to SeriesCount after %d tries: %v", tries, err)
+	} else {
+		logger.Infof("SeriesCount took %d tries", tries)
+	}
+	return result, err
 }
 
 func (api *vmreadAPI) Tenants(qt *querytracer.Tracer, tr storage.TimeRange, deadline uint64) ([]string, error) {
-	return api.s.SearchTenants(qt, tr, deadline)
+	var tenants []string
+	tries, err := panicutil.ToErrorWithRetry(5, func() error {
+		var err error
+		tenants, err = api.s.SearchTenants(qt, tr, deadline)
+		return err
+	})
+	if err != nil {
+		logger.Errorf("Failed to Tenants after %d tries: %v", tries, err)
+	} else {
+		logger.Infof("Tenants took %d tries", tries)
+	}
+	return tenants, err
 }
 
 func (api *vmreadAPI) TSDBStatus(qt *querytracer.Tracer, sq *storage.SearchQuery, focusLabel string, topN int, deadline uint64) (*storage.TSDBStatus, error) {

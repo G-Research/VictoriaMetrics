@@ -59,7 +59,7 @@ type ReadOnlyStorage struct {
 }
 
 // NewReadOnlyStorage returns a new read-only storage.
-func NewReadOnlyStorage(cfg *ReadOnlyConfig) *ReadOnlyStorage {
+func NewReadOnlyStorage(cfg *ReadOnlyConfig) (*ReadOnlyStorage, error) {
 	retention := cfg.Retention
 	if retention <= 0 || retention > retentionMax {
 		retention = retentionMax
@@ -79,10 +79,13 @@ func NewReadOnlyStorage(cfg *ReadOnlyConfig) *ReadOnlyStorage {
 	s.metricNameCache = s.mustLoadCache("metricID_metricName", mem/10)
 
 	tablePath := filepath.Join(cfg.StoragePath, dataDirname)
-	tb := mustOpenReadOnlyTable(tablePath, s)
+	tb, err := mustOpenReadOnlyTable(tablePath, s)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open read-only table at %q: %w", tablePath, err)
+	}
 	s.tb = tb
 
-	return s
+	return s, nil
 }
 
 // RetentionMsecs returns retentionMsecs for s.

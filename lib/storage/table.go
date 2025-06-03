@@ -561,27 +561,24 @@ func mustOpenPartitions(smallPartitionsPath, bigPartitionsPath string, s *Storag
 	return pts
 }
 
-func mustPopulatePartitionNames(partitionsPath string, ptNames map[string]bool) {
-	for range 5 {
-		des, err := os.ReadDir(partitionsPath)
-		if err != nil {
-			time.Sleep(100 * time.Millisecond)
+func mustPopulatePartitionNames(partitionsPath string, ptNames map[string]bool) error {
+	des, err := os.ReadDir(partitionsPath)
+	if err != nil {
+		return fmt.Errorf("failed to read directory")
+	}
+	for _, de := range des {
+		if !fs.IsDirOrSymlink(de) {
+			// Skip non-directories
 			continue
 		}
-		for _, de := range des {
-			if !fs.IsDirOrSymlink(de) {
-				// Skip non-directories
-				continue
-			}
-			ptName := de.Name()
-			if ptName == snapshotsDirname {
-				// Skip directory with snapshots
-				continue
-			}
-			ptNames[ptName] = true
+		ptName := de.Name()
+		if ptName == snapshotsDirname {
+			// Skip directory with snapshots
+			continue
 		}
-		return
+		ptNames[ptName] = true
 	}
+	return nil
 }
 
 type partitionWrappers struct {

@@ -1,11 +1,11 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
@@ -33,7 +33,7 @@ type readOnlyTable struct {
 // mustOpenTable opens a table on the given path.
 //
 // The table is created if it doesn't exist.
-func mustOpenReadOnlyTable(path string, s *ReadOnlyStorage) *readOnlyTable {
+func mustOpenReadOnlyTable(path string, s *ReadOnlyStorage) (*readOnlyTable, error) {
 	path = filepath.Clean(path)
 
 	// Create directories for small and big partitions if they don't exist yet.
@@ -41,7 +41,10 @@ func mustOpenReadOnlyTable(path string, s *ReadOnlyStorage) *readOnlyTable {
 	bigPartitionsPath := filepath.Join(path, bigDirname)
 
 	// Open partitions.
-	pts := mustOpenPartitionsReadOnly(smallPartitionsPath, bigPartitionsPath)
+	pts, err := mustOpenPartitionsReadOnly(smallPartitionsPath, bigPartitionsPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open partitions for table at %q: %w", path, err)
+	}
 
 	tb := &readOnlyTable{
 		path:                path,
@@ -54,7 +57,7 @@ func mustOpenReadOnlyTable(path string, s *ReadOnlyStorage) *readOnlyTable {
 	for _, pt := range pts {
 		tb.addPartitionNolock(pt)
 	}
-	return tb
+	return tb, nil
 }
 
 func (tb *readOnlyTable) addPartitionNolock(pt *partition) {
@@ -143,56 +146,53 @@ func (tb *readOnlyTable) PutPartitions(ptws []*partitionWrapper) {
 	}
 }
 
-func mustOpenPartitionsReadOnly(smallPartitionsPath, bigPartitionsPath string) []*partition {
+func mustOpenPartitionsReadOnly(smallPartitionsPath, bigPartitionsPath string) ([]*partition, error) {
 	pts := make([]*partition, 0)
-	for range 5 {
-		pts = pts[:0]
-		// Certain partition directories in either `big` or `small` dir may be missing
-		// after restoring from backup. So populate partition names from both dirs.
-		ptNames := make(map[string]bool)
-		mustPopulatePartitionNames(smallPartitionsPath, ptNames)
-		mustPopulatePartitionNames(bigPartitionsPath, ptNames)
-		var ptsLock sync.Mutex
+	pts = pts[:0]
+	// Certain partition directories in either `big` or `small` dir may be missing
+	// after restoring from backup. So populate partition names from both dirs.
+	ptNames := make(map[string]bool)
+	if err := mustPopulatePartitionNames(smallPartitionsPath, ptNames); err != nil {
+		return nil, fmt.Errorf("cannot populate partition names from small partitions path %q: %w", smallPartitionsPath, err)
+	}
+	if err := mustPopulatePartitionNames(bigPartitionsPath, ptNames); err != nil {
+		return nil, fmt.Errorf("cannot populate partition names from big partitions path %q: %w", bigPartitionsPath, err)
+	}
+	var ptsLock sync.Mutex
 
-		// Open partitions in parallel. This should reduce the time needed for opening multiple partitions.
-		var wg sync.WaitGroup
-		concurrencyLimiterCh := make(chan struct{}, cgroup.AvailableCPUs())
-		var retry atomic.Bool
-		for ptName := range ptNames {
-			wg.Add(1)
-			concurrencyLimiterCh <- struct{}{}
-			go func(ptName string) {
-				defer func() {
-					<-concurrencyLimiterCh
-					wg.Done()
-				}()
+	// Open partitions in parallel. This should reduce the time needed for opening multiple partitions.
+	var wg sync.WaitGroup
+	errCh := make(chan error, cgroup.AvailableCPUs())
+	concurrencyLimiterCh := make(chan struct{}, cgroup.AvailableCPUs())
+	for ptName := range ptNames {
+		wg.Add(1)
+		concurrencyLimiterCh <- struct{}{}
+		go func(ptName string) {
+			defer func() {
+				<-concurrencyLimiterCh
+				wg.Done()
+			}()
 
-				smallPartsPath := filepath.Join(smallPartitionsPath, ptName)
-				bigPartsPath := filepath.Join(bigPartitionsPath, ptName)
-				pt, err := mustOpenPartitionReadOnly(smallPartsPath, bigPartsPath)
-				if err != nil {
-					logger.Warnf("failed to open partition read only: %w", err)
-					retry.Store(true)
-					return
-				}
+			smallPartsPath := filepath.Join(smallPartitionsPath, ptName)
+			bigPartsPath := filepath.Join(bigPartitionsPath, ptName)
+			pt, err := mustOpenPartitionReadOnly(smallPartsPath, bigPartsPath)
+			if err != nil {
+				errCh <- fmt.Errorf("cannot open partition %q: %w", ptName, err)
+				return
+			}
 
-				ptsLock.Lock()
-				pts = append(pts, pt)
-				ptsLock.Unlock()
-			}(ptName)
-		}
-		wg.Wait()
+			ptsLock.Lock()
+			pts = append(pts, pt)
+			ptsLock.Unlock()
+		}(ptName)
+	}
+	wg.Wait()
+	close(errCh)
 
-		if retry.Load() {
-			logger.Warnf("retrying since some partitions are failing to open")
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-
-		return pts
+	var errs []error
+	for err := range errCh {
+		errs = append(errs, err)
 	}
 
-	logger.Warnf("exhausted all retries; returning partial results")
-
-	return pts
+	return pts, errors.Join(errs...)
 }

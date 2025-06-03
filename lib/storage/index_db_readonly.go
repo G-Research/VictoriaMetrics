@@ -94,15 +94,9 @@ func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) (*readOnlyIndex
 	// 	logger.Panicf("BUG: Storage must be non-nil")
 	// }
 
-	var indexDBPath string
-	for range 5 {
-		var err error
-		indexDBPath, err = getCurrentIndexDBPath(path)
-		if err == nil {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-		continue
+	indexDBPath, err := getCurrentIndexDBPath(path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get current index db path from %q: %w", path, err)
 	}
 
 	name := filepath.Base(indexDBPath)
@@ -111,7 +105,10 @@ func openReadOnlyCurrentIndexDB(path string, s *ReadOnlyStorage) (*readOnlyIndex
 		logger.Panicf("FATAL: cannot parse indexdb path %q: %s", indexDBPath, err)
 	}
 
-	s.tb = mustOpenReadOnlyTable(filepath.Join(s.storagePath, dataDirname), s)
+	s.tb, err = mustOpenReadOnlyTable(filepath.Join(s.storagePath, dataDirname), s)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open data table for index db at %q: %w", indexDBPath, err)
+	}
 
 	// Do not persist tagFiltersToMetricIDsCache in files, since it is very volatile because of tagFiltersKeyGen.
 	mem := memory.Allowed()

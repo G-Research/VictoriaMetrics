@@ -14,6 +14,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/httpserver"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/panicutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/pushmetrics"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/storage"
@@ -51,12 +52,21 @@ func main() {
 		logger.Panicf("storage path %q must exist when vmread is created", *storageDataPath)
 	}
 
-	readOnlyStorage := storage.NewReadOnlyStorage(&storage.ReadOnlyConfig{
-		Retention:          retentionPeriod.Duration(),
-		CachePath:          *cacheDataPath,
-		StoragePath:        *storageDataPath,
-		DisablePerDayIndex: *disablePerDayIndex,
+	var readOnlyStorage *storage.ReadOnlyStorage
+	_, err := panicutil.ToErrorWithRetry(5, func() error {
+		var err error
+		readOnlyStorage, err = storage.NewReadOnlyStorage(&storage.ReadOnlyConfig{
+			Retention:          retentionPeriod.Duration(),
+			CachePath:          *cacheDataPath,
+			StoragePath:        *storageDataPath,
+			DisablePerDayIndex: *disablePerDayIndex,
+		})
+		return err
 	})
+	if err != nil {
+		logger.Fatalf("cannot create read-only storage with -storageDataPath=%s: %s", *storageDataPath, err)
+	}
+
 	vmselectSrv, err := servers.NewVMSelectServer(*vmselectAddr, readOnlyStorage)
 	if err != nil {
 		logger.Fatalf("cannot create a server with -vmselectAddr=%s: %s", *vmselectAddr, err)
