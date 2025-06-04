@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
+	"runtime/debug"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
@@ -13,9 +13,7 @@ import (
 func ToError(f func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			buf := make([]byte, 4096)
-			runtime.Stack(buf, false)
-			err = fmt.Errorf("panic: %v\nstack trace:\n%s", r, buf)
+			err = fmt.Errorf("panic: %v\nstack trace:\n%s", r, debug.Stack())
 		}
 	}()
 
