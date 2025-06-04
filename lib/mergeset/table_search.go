@@ -183,7 +183,7 @@ func (ts *TableSearch) Error() error {
 // MustClose closes the ts.
 func (ts *TableSearch) MustClose() {
 	if !ts.needClosing {
-		logger.Panicf("BUG: missing Init call before MustClose call")
+		return
 	}
 	ts.tb.putParts(ts.pws)
 	ts.reset()

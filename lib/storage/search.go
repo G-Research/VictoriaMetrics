@@ -231,7 +231,7 @@ func (s *Search) Init(qt *querytracer.Tracer, storage *Storage, tfss []*TagFilte
 // MustClose closes the Search.
 func (s *Search) MustClose() {
 	if !s.needClosing {
-		logger.Panicf("BUG: missing Init call before MustClose")
+		return
 	}
 	s.ts.MustClose()
 	s.putIndexDB()

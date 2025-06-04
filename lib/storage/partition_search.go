@@ -167,7 +167,7 @@ func (pts *partitionSearch) Error() error {
 // MustClose closes the pts.
 func (pts *partitionSearch) MustClose() {
 	if !pts.needClosing {
-		logger.Panicf("BUG: missing Init call before the MustClose call")
+		return
 	}
 
 	pts.pt.PutParts(pts.pws)

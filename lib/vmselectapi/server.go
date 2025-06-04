@@ -1075,7 +1075,8 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
 			blocksRead++
 			s.metricBlocksRead.Inc()
 			s.metricRowsRead.Add(ctx.mb.Block.RowsCount())
-			dataBuffers = append(dataBuffers, ctx.mb.Marshal(ctx.dataBuf[:0]))
+			var buf []byte
+			dataBuffers = append(dataBuffers, ctx.mb.Marshal(buf))
 		}
 
 		if err := bi.Error(); err != nil {

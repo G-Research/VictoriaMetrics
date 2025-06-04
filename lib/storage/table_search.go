@@ -169,7 +169,7 @@ func (ts *tableSearch) Error() error {
 // MustClose closes the ts.
 func (ts *tableSearch) MustClose() {
 	if !ts.needClosing {
-		logger.Panicf("BUG: missing Init call before MustClose call")
+		return
 	}
 	for i := range ts.ptsPool {
 		ts.ptsPool[i].MustClose()
