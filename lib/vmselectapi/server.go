@@ -570,37 +570,34 @@ func (s *Server) endConcurrentRequest() {
 }
 
 func (s *Server) processRPC(ctx *vmselectRequestCtx, rpcName string) error {
-	_, err := panicutil.ToErrorWithRetry(5, func() error {
-		switch rpcName {
-		case "search_v7":
-			return s.processSearch(ctx)
-		case "searchMetricNames_v3":
-			return s.processSearchMetricNames(ctx)
-		case "labelValues_v5":
-			return s.processLabelValues(ctx)
-		case "tagValueSuffixes_v4":
-			return s.processTagValueSuffixes(ctx)
-		case "labelNames_v5":
-			return s.processLabelNames(ctx)
-		case "seriesCount_v4":
-			return s.processSeriesCount(ctx)
-		case "tsdbStatus_v6":
-			return s.processTSDBStatus(ctx)
-		case "deleteSeries_v5":
-			return s.processDeleteSeries(ctx)
-		case "registerMetricNames_v3":
-			return s.processRegisterMetricNames(ctx)
-		case "tenants_v1":
-			return s.processTenants(ctx)
-		case "metricNamesUsageStats_v1":
-			return s.processMetricNamesUsageStats(ctx)
-		case "resetMetricNamesStats_v1":
-			return s.processResetMetricUsageStats(ctx)
-		default:
-			return fmt.Errorf("unsupported rpcName: %q", rpcName)
-		}
-	})
-	return err
+	switch rpcName {
+	case "search_v7":
+		return s.processSearch(ctx)
+	case "searchMetricNames_v3":
+		return s.processSearchMetricNames(ctx)
+	case "labelValues_v5":
+		return s.processLabelValues(ctx)
+	case "tagValueSuffixes_v4":
+		return s.processTagValueSuffixes(ctx)
+	case "labelNames_v5":
+		return s.processLabelNames(ctx)
+	case "seriesCount_v4":
+		return s.processSeriesCount(ctx)
+	case "tsdbStatus_v6":
+		return s.processTSDBStatus(ctx)
+	case "deleteSeries_v5":
+		return s.processDeleteSeries(ctx)
+	case "registerMetricNames_v3":
+		return s.processRegisterMetricNames(ctx)
+	case "tenants_v1":
+		return s.processTenants(ctx)
+	case "metricNamesUsageStats_v1":
+		return s.processMetricNamesUsageStats(ctx)
+	case "resetMetricNamesStats_v1":
+		return s.processResetMetricUsageStats(ctx)
+	default:
+		return fmt.Errorf("unsupported rpcName: %q", rpcName)
+	}
 }
 
 const (
@@ -1053,42 +1050,55 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
 	}
 	defer s.endConcurrentRequest()
 
-	// Initiaialize the search.
-	bi, err := s.api.InitSearch(ctx.qt, &ctx.sq, ctx.deadline)
-	if err != nil {
-		return ctx.writeErrorMessage(err)
-	}
-	defer bi.MustClose()
-
-	// Send empty error message to vmselect.
-	if err := ctx.writeString(""); err != nil {
-		return fmt.Errorf("cannot send empty error message: %w", err)
-	}
-
-	// Send found blocks to vmselect.
-	blocksRead := 0
-	for bi.NextBlock(&ctx.mb) {
-		blocksRead++
-		s.metricBlocksRead.Inc()
-		s.metricRowsRead.Add(ctx.mb.Block.RowsCount())
-
-		ctx.dataBuf = ctx.mb.Marshal(ctx.dataBuf[:0])
-		if err := ctx.writeDataBufBytes(); err != nil {
-			return fmt.Errorf("cannot send block with %d rows to vmselect: %w", ctx.mb.Block.RowsCount(), err)
+	var dataBuffers [][]byte
+	_, err := panicutil.ToErrorWithRetry(5, func() error {
+		// reset buffers
+		dataBuffers = dataBuffers[:0]
+		// Copy ctx to avoid modifying the original ctx.
+		cctx := *ctx
+		ctx = &cctx
+		// Initiaialize the search.
+		bi, err := s.api.InitSearch(ctx.qt, &ctx.sq, ctx.deadline)
+		if err != nil {
+			return ctx.writeErrorMessage(err)
 		}
-	}
+		defer bi.MustClose()
 
-	if err := bi.Error(); err != nil {
-		return fmt.Errorf("cannot read search results: %w", err)
-	}
+		// Send empty error message to vmselect.
+		if err := ctx.writeString(""); err != nil {
+			return fmt.Errorf("cannot send empty error message: %w", err)
+		}
 
-	ctx.qt.Printf("sent %d blocks to vmselect", blocksRead)
+		// Send found blocks to vmselect.
+		blocksRead := 0
+		for bi.NextBlock(&ctx.mb) {
+			blocksRead++
+			s.metricBlocksRead.Inc()
+			s.metricRowsRead.Add(ctx.mb.Block.RowsCount())
+			dataBuffers = append(dataBuffers, ctx.mb.Marshal(ctx.dataBuf[:0]))
+		}
 
-	// Send 'end of response' marker
-	if err := ctx.writeString(""); err != nil {
-		return fmt.Errorf("cannot send 'end of response' marker")
-	}
-	return nil
+		if err := bi.Error(); err != nil {
+			return fmt.Errorf("cannot read search results: %w", err)
+		}
+
+		for _, dataBuf := range dataBuffers {
+			ctx.dataBuf = dataBuf
+			if err := ctx.writeDataBufBytes(); err != nil {
+				return fmt.Errorf("cannot send block with %d rows to vmselect: %w", ctx.mb.Block.RowsCount(), err)
+			}
+		}
+
+		ctx.qt.Printf("sent %d blocks to vmselect", blocksRead)
+
+		// Send 'end of response' marker
+		if err := ctx.writeString(""); err != nil {
+			return fmt.Errorf("cannot send 'end of response' marker")
+		}
+		return nil
+	})
+
+	return err
 }
 
 func (s *Server) processMetricNamesUsageStats(ctx *vmselectRequestCtx) error {

@@ -67,7 +67,7 @@ type vmreadAPI struct {
 }
 
 func (api *vmreadAPI) InitSearch(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) (vmselectapi.BlockIterator, error) {
-	var bi *blockIterator
+	var blockIterator *blockIterator
 	tries, err := panicutil.ToErrorWithRetry(5, func() error {
 		tr := sq.GetTimeRange()
 		if err := checkTimeRange(api.s, tr); err != nil {
@@ -81,12 +81,13 @@ func (api *vmreadAPI) InitSearch(qt *querytracer.Tracer, sq *storage.SearchQuery
 		if len(tfss) == 0 {
 			return fmt.Errorf("missing tag filters")
 		}
-		bi = getBlockIterator()
+		bi := getBlockIterator()
 		bi.sr.Init(qt, api.s, tfss, tr, maxMetrics, deadline)
 		if err := bi.sr.Error(); err != nil {
 			bi.MustClose()
 			return err
 		}
+		blockIterator = bi
 		return nil
 	})
 	if err != nil {
@@ -94,7 +95,7 @@ func (api *vmreadAPI) InitSearch(qt *querytracer.Tracer, sq *storage.SearchQuery
 	} else {
 		logger.Infof("InitSearch for %q took %d tries", sq, tries)
 	}
-	return bi, err
+	return blockIterator, err
 }
 
 func (api *vmreadAPI) SearchMetricNames(qt *querytracer.Tracer, sq *storage.SearchQuery, deadline uint64) ([]string, error) {
@@ -302,13 +303,15 @@ func (api *vmreadAPI) setupTfss(qt *querytracer.Tracer, sq *storage.SearchQuery,
 
 // blockIterator implements vmselectapi.BlockIterator
 type blockIterator struct {
-	sr storage.ReadOnlySearch
+	sr  storage.ReadOnlySearch
+	err error
 }
 
 var blockIteratorsPool sync.Pool
 
 func (bi *blockIterator) MustClose() {
 	bi.sr.MustClose()
+	bi.err = nil
 	blockIteratorsPool.Put(bi)
 }
 
@@ -321,7 +324,7 @@ func getBlockIterator() *blockIterator {
 }
 
 func (bi *blockIterator) NextBlock(mb *storage.MetricBlock) bool {
-	if !bi.sr.NextMetricBlock() {
+	if bi.err != nil || !bi.sr.NextMetricBlock() {
 		return false
 	}
 	mb.MetricName = append(mb.MetricName[:0], bi.sr.MetricBlockRef.MetricName...)

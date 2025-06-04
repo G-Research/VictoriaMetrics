@@ -62,24 +62,14 @@ func (r *ReaderAt) MustReadAt(p []byte, off int64) {
 	// Lazily open the file at r.path on the first access
 	mr := r.getMmapReader()
 
-	// Read len(p) bytes at offset off to p.
-	if len(mr.mmapData) == 0 {
-		n, err := mr.f.ReadAt(p, off)
-		if err != nil {
-			logger.Panicf("FATAL: cannot read %d bytes at offset %d of file %q: %s", len(p), off, r.path, err)
-		}
-		if n != len(p) {
-			logger.Panicf("FATAL: unexpected number of bytes read from file %q; got %d; want %d", r.path, n, len(p))
-		}
-	} else {
-		if off > int64(len(mr.mmapData)-len(p)) {
-			logger.Panicf("BUG: off=%d is out of allowed range [0...%d] for len(p)=%d", off, len(mr.mmapData)-len(p), len(p))
-		}
-		src := mr.mmapData[off:]
-		// The copy() below may result in thread block as described at https://valyala.medium.com/mmap-in-go-considered-harmful-d92a25cb161d .
-		// But production workload proved this is OK in most cases, so use it without fear :)
-		copy(p, src)
+	n, err := mr.f.ReadAt(p, off)
+	if err != nil {
+		logger.Panicf("FATAL: cannot read %d bytes at offset %d of file %q: %s", len(p), off, r.path, err)
 	}
+	if n != len(p) {
+		logger.Panicf("FATAL: unexpected number of bytes read from file %q; got %d; want %d", r.path, n, len(p))
+	}
+
 	if r.useLocalStats {
 		r.readCalls.Add(1)
 		r.readBytes.Add(int64(len(p)))

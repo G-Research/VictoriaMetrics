@@ -249,6 +249,7 @@ var blockIteratorsPool sync.Pool
 
 func (bi *blockIterator) MustClose() {
 	bi.sr.MustClose()
+	bi.err = nil
 	blockIteratorsPool.Put(bi)
 }
 
