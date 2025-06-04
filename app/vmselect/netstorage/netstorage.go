@@ -3352,7 +3352,6 @@ func execSearchQuery(qt *querytracer.Tracer, sq *storage.SearchQuery, cb func(qt
 // TODO: @f41gh7 this function could produce duplicates
 // if original metric name have tenant labels
 func metricNameTenantToTags(mn *storage.MetricName) {
-
 	buf := make([]byte, 0, 8)
 	buf = strconv.AppendUint(buf, uint64(mn.AccountID), 10)
 	mn.AddTagBytes([]byte(`vm_account_id`), buf)

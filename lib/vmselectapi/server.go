@@ -1051,12 +1051,10 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
 	defer s.endConcurrentRequest()
 
 	var dataBuffers [][]byte
+	var blocksRead int
 	_, err := panicutil.ToErrorWithRetry(5, func() error {
 		// reset buffers
 		dataBuffers = dataBuffers[:0]
-		// Copy ctx to avoid modifying the original ctx.
-		cctx := *ctx
-		ctx = &cctx
 		// Initiaialize the search.
 		bi, err := s.api.InitSearch(ctx.qt, &ctx.sq, ctx.deadline)
 		if err != nil {
@@ -1064,13 +1062,8 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
 		}
 		defer bi.MustClose()
 
-		// Send empty error message to vmselect.
-		if err := ctx.writeString(""); err != nil {
-			return fmt.Errorf("cannot send empty error message: %w", err)
-		}
-
 		// Send found blocks to vmselect.
-		blocksRead := 0
+		blocksRead = 0
 		for bi.NextBlock(&ctx.mb) {
 			blocksRead++
 			s.metricBlocksRead.Inc()
@@ -1083,21 +1076,30 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
 			return fmt.Errorf("cannot read search results: %w", err)
 		}
 
-		for _, dataBuf := range dataBuffers {
-			ctx.dataBuf = dataBuf
-			if err := ctx.writeDataBufBytes(); err != nil {
-				return fmt.Errorf("cannot send block with %d rows to vmselect: %w", ctx.mb.Block.RowsCount(), err)
-			}
-		}
-
-		ctx.qt.Printf("sent %d blocks to vmselect", blocksRead)
-
-		// Send 'end of response' marker
-		if err := ctx.writeString(""); err != nil {
-			return fmt.Errorf("cannot send 'end of response' marker")
-		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// Send empty error message to vmselect.
+	if err := ctx.writeString(""); err != nil {
+		return fmt.Errorf("cannot send empty error message: %w", err)
+	}
+
+	for _, dataBuf := range dataBuffers {
+		ctx.dataBuf = dataBuf
+		if err := ctx.writeDataBufBytes(); err != nil {
+			return fmt.Errorf("cannot send block with %d rows to vmselect: %w", ctx.mb.Block.RowsCount(), err)
+		}
+	}
+
+	ctx.qt.Printf("sent %d blocks to vmselect", blocksRead)
+
+	// Send 'end of response' marker
+	if err := ctx.writeString(""); err != nil {
+		return fmt.Errorf("cannot send 'end of response' marker")
+	}
 
 	return err
 }
