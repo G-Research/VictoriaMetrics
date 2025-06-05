@@ -127,9 +127,6 @@ func (s *ReadOnlySearch) Init(qt *querytracer.Tracer, storage *ReadOnlyStorage, 
 
 // MustClose closes the Search.
 func (s *ReadOnlySearch) MustClose() {
-	if !s.needClosing {
-		return
-	}
 	s.reset()
 }
 
