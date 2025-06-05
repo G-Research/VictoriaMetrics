@@ -78,7 +78,6 @@ func loadWithExpire(filePath string, maxBytes int, expireDuration time.Duration)
 		prev := fastcache.LoadFromFileOrNew(filePath, maxBytes/2)
 		curr := fastcache.New(maxBytes / 2)
 		c := newCacheInternal(curr, prev, split, maxBytes)
-		c.runWatchers(expireDuration)
 		return c
 	}
 
@@ -100,7 +99,6 @@ func newWithExpire(maxBytes int, expireDuration time.Duration) *Cache {
 	curr := fastcache.New(maxBytes / 2)
 	prev := fastcache.New(1024)
 	c := newCacheInternal(curr, prev, split, maxBytes)
-	c.runWatchers(expireDuration)
 	return c
 }
 
