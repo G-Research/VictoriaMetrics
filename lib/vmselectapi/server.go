@@ -1,6 +1,7 @@
 package vmselectapi
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -1050,11 +1051,14 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
 	}
 	defer s.endConcurrentRequest()
 
-	var dataBuffers [][]byte
+	// Send empty error message to vmselect.
+	if err := ctx.writeString(""); err != nil {
+		return fmt.Errorf("cannot send empty error message: %w", err)
+	}
+
+	blocksSent := make(map[string]bool)
 	var blocksRead int
 	_, err := panicutil.ToErrorWithRetry(5, func() error {
-		// reset buffers
-		dataBuffers = dataBuffers[:0]
 		// Initiaialize the search.
 		bi, err := s.api.InitSearch(ctx.qt, &ctx.sq, ctx.deadline)
 		if err != nil {
@@ -1068,8 +1072,15 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
 			blocksRead++
 			s.metricBlocksRead.Inc()
 			s.metricRowsRead.Add(ctx.mb.Block.RowsCount())
-			var buf []byte
-			dataBuffers = append(dataBuffers, ctx.mb.Marshal(buf))
+			ctx.dataBuf = ctx.mb.Marshal(ctx.dataBuf[:0])
+			val := fmt.Sprintf("%x", sha256.Sum256(ctx.dataBuf))
+			if blocksSent[val] {
+				continue
+			}
+			if err := ctx.writeDataBufBytes(); err != nil {
+				return fmt.Errorf("cannot send block with %d rows to vmselect: %w", ctx.mb.Block.RowsCount(), err)
+			}
+			blocksSent[val] = true
 		}
 
 		if err := bi.Error(); err != nil {
@@ -1080,18 +1091,6 @@ func (s *Server) processSearch(ctx *vmselectRequestCtx) error {
 	})
 	if err != nil {
 		return err
-	}
-
-	// Send empty error message to vmselect.
-	if err := ctx.writeString(""); err != nil {
-		return fmt.Errorf("cannot send empty error message: %w", err)
-	}
-
-	for _, dataBuf := range dataBuffers {
-		ctx.dataBuf = dataBuf
-		if err := ctx.writeDataBufBytes(); err != nil {
-			return fmt.Errorf("cannot send block with %d rows to vmselect: %w", ctx.mb.Block.RowsCount(), err)
-		}
 	}
 
 	ctx.qt.Printf("sent %d blocks to vmselect", blocksRead)
