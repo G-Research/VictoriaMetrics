@@ -37,6 +37,7 @@ type ReaderAt struct {
 
 	// path contains the path to the file for reading
 	path string
+	file *os.File // file is used for pread() if mmap is disabled
 
 	// mr is used for lazy opening of the file at path on the first access.
 	mr     atomic.Pointer[mmapReader]
@@ -59,10 +60,15 @@ func (r *ReaderAt) MustReadAt(p []byte, off int64) {
 		logger.Panicf("BUG: off=%d cannot be negative", off)
 	}
 
-	// Lazily open the file at r.path on the first access
-	mr := r.getMmapReader()
+	var err error
+	if r.file == nil {
+		r.file, err = os.Open(r.path)
+		if err != nil {
+			logger.Panicf("FATAL: cannot open file %q for reading: %s; try increasing the limit on the number of open files via 'ulimit -n'", r.path, err)
+		}
+	}
 
-	n, err := mr.f.ReadAt(p, off)
+	n, err := r.file.ReadAt(p, off)
 	if err != nil {
 		logger.Panicf("FATAL: cannot read %d bytes at offset %d of file %q: %s", len(p), off, r.path, err)
 	}
@@ -102,6 +108,11 @@ var (
 
 // MustClose closes r.
 func (r *ReaderAt) MustClose() {
+	if r.file != nil {
+		if err := r.file.Close(); err != nil {
+			logger.Panicf("FATAL: cannot close file %q: %s", r.path, err)
+		}
+	}
 	mr := r.mr.Load()
 	if mr != nil {
 		mr.mustClose()
@@ -153,10 +164,9 @@ func MustOpenReaderAt(path string) *ReaderAt {
 //
 // MustClose must be called on the returned ReaderAt when it is no longer needed.
 func NewReaderAt(f *os.File) *ReaderAt {
-	mr := newMmapReaderFromFile(f)
 	var r ReaderAt
 	r.path = f.Name()
-	r.mr.Store(mr)
+	r.file = f
 	return &r
 }
 

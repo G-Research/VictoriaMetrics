@@ -13,8 +13,8 @@ import (
 
 func mmap(fd int, length int) (data []byte, err error) {
 	return unix.Mmap(fd, 0, length, unix.PROT_READ, unix.MAP_SHARED)
-
 }
+
 func mUnmap(data []byte) error {
 	return unix.Munmap(data)
 }
